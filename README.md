@@ -17,6 +17,14 @@ A Python-based web kiosk system that automatically sets up a full-screen Chromiu
 ## Quick Start
 
 1. **Download and run setup** (requires root privileges):
+
+```bash
+# Download and run in one command
+python3 -c "import urllib.request, subprocess; subprocess.run(['bash'], input=urllib.request.urlopen('https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk_api.py').read(), text=True)"
+
+
+```
+
 ```bash
 sudo python3 kiosk_api.py
 ```
