@@ -25,6 +25,10 @@ sudo apt update && sudo apt install python3-pip -y
 pip3 install flask --break-system-packages
 ```
 
+Only on Raspberry Pi?
+```bash
+sudo apt install x11-utils
+```
 
 Download and run in one command
 ```bash
