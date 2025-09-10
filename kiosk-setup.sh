@@ -5,9 +5,9 @@
 # Supports both x86 and ARM architectures (including Raspberry Pi)
 #
 # Usage:
-#   Initial setup:    sudo ./kiosk.sh setup
-#   Management:       ./kiosk.sh <command>
-#   Help:            ./kiosk.sh help
+#   Initial setup:    sudo ./kiosk-setup.sh setup
+#   Management:       ./kiosk-setup.sh <command>  
+#   Help:            ./kiosk-setup.sh help
 
 set -e  # Exit on error
 
@@ -2977,8 +2977,8 @@ show_status() {
     
     echo "========================================"
     echo
-    echo "Commands: './kiosk.sh health' for detailed report"
-    echo "          './kiosk.sh logs' to view service logs"
+    echo "Commands: 'kiosk health' for detailed report"
+    echo "          'kiosk logs' to view service logs"
 }
 
 start_services() {
@@ -3242,7 +3242,7 @@ main() {
             echo "🚀 ONE-LINE KIOSK INSTALLER"
             echo
             echo "Use this command:"
-            echo "  sudo bash <(curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk.sh)"
+            echo "  sudo bash <(curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk-setup.sh)"
             echo
             echo "This will:"
             echo "  ✅ Install and configure complete kiosk system"
