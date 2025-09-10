@@ -1141,7 +1141,7 @@ monitor_browser_health() {
         
         # Check memory usage
         local browser_memory
-        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {print sum+0}')
+        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {printf "%.0f", sum+0}')
         
         if [[ $browser_memory -gt $max_memory_kb ]]; then
             log_warn "Browser memory usage high: ${browser_memory}KB > ${max_memory_kb}KB, restarting..."
@@ -1335,7 +1335,7 @@ get_system_health_report() {
     if pgrep -f chromium >/dev/null; then
         echo "=== BROWSER MEMORY ==="
         local browser_memory
-        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {print sum+0}')
+        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {printf "%.0f", sum+0}')
         echo "Total memory: ${browser_memory}KB"
         echo "Limit: ${BROWSER_MEMORY_LIMIT}KB"
         if [[ $browser_memory -gt $BROWSER_MEMORY_LIMIT ]]; then
@@ -2943,7 +2943,7 @@ show_status() {
     
     if pgrep -f chromium > /dev/null; then
         local browser_memory
-        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {print sum+0}')
+        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {printf "%.0f", sum+0}')
         local mem_status="OK"
         local mem_color="$GREEN"
         
