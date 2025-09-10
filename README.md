@@ -18,21 +18,9 @@ A Python-based web kiosk system that automatically sets up a full-screen Chromiu
 
 1. **Download and run setup** (requires root privileges):
 
-```bash
-sudo apt update && sudo apt install python3-pip -y
-```
-```bash
-pip3 install flask --break-system-packages
-```
-
-Only on Raspberry Pi?
-```bash
-sudo apt install x11-utils
-```
-
 Download and run in one command
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk.sh)
+bash <(curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk-setup.sh)
 ```
 
 ```bash
