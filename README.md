@@ -32,7 +32,9 @@ sudo apt install x11-utils
 
 Download and run in one command
 ```bash
-python3 -c "import os, urllib.request, subprocess; os.makedirs('/opt/kiosk', exist_ok=True); urllib.request.urlretrieve('https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk_api.py', '/opt/kiosk/kiosk_api.py'); subprocess.run(['python3', '/opt/kiosk/kiosk_api.py'])"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/vm/debian-vm.sh)"
+# Download and run in one command
+bash <(curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk.sh)
 
 
 ```
