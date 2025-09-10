@@ -1777,31 +1777,18 @@ chromium --version 2>/dev/null || chromium-browser --version 2>/dev/null || echo
 # === UPDATE CHROMIUM ===
 
 # For APT installation (Debian/Ubuntu 20.04 and earlier):
-if dpkg -l | grep -q chromium; then
-    sudo apt update
-    sudo apt upgrade chromium-browser -y
-    sudo kiosk restart
-fi
+sudo apt update && sudo apt upgrade chromium-browser -y && sudo kiosk restart
 
 # For Snap installation (Ubuntu 22.04+):
-if command -v snap list chromium &>/dev/null && snap list chromium &>/dev/null; then
-    sudo snap refresh chromium
-    sudo kiosk restart
-fi
+sudo snap refresh chromium && sudo kiosk restart
 
 # === TROUBLESHOOTING ===
 
 # Force reinstall Chromium (APT method)
-if dpkg -l | grep -q chromium; then
-    sudo apt remove chromium-browser -y
-    sudo apt install chromium-browser -y
-fi
+sudo apt remove chromium-browser -y && sudo apt install chromium-browser -y
 
 # Force reinstall Chromium (Snap method)  
-if command -v snap list chromium &>/dev/null && snap list chromium &>/dev/null; then
-    sudo snap remove chromium
-    sudo snap install chromium
-fi
+sudo snap remove chromium && sudo snap install chromium
 
 # Clear Chromium cache and data (run as kiosk user)
 sudo -u kiosk rm -rf /opt/kiosk/.cache/chromium/ 2>/dev/null
@@ -2909,16 +2896,9 @@ regenerate_api_key() {
     local new_key
     new_key=$(generate_api_key)
     
-    if [[ -f "$API_CONFIG_FILE" ]]; then
-        sed -i "s/\"api_key\": \"[^\"]*\"/\"api_key\": \"$new_key\"/" "$API_CONFIG_FILE"
-    else
-        cat > "$API_CONFIG_FILE" << EOF
-{
-  "api_key": "$new_key",
-  "require_auth": true
-}
-EOF
-    fi
+    # Update unified configuration file
+    set_config_value "api.api_key" "$new_key"
+    set_config_value "api.require_auth" "true"
     
     log_info "New API key generated: $new_key"
     
