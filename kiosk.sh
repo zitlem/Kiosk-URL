@@ -1378,12 +1378,14 @@ install_x86_packages() {
                     ;;
                 "google-chrome-stable")
                     log_info "Adding Google Chrome repository..."
-                    # Download and install the new GPG key
-                    wget -q -O /tmp/google-chrome-key.gpg https://dl.google.com/linux/linux_signing_key.pub
-                    gpg --dearmor < /tmp/google-chrome-key.gpg > /usr/share/keyrings/google-chrome-keyring.gpg 2>/dev/null || true
-                    rm -f /tmp/google-chrome-key.gpg
-                    # Add repository with signed-by keyring
+                    # Remove old repository if it exists
+                    rm -f /etc/apt/sources.list.d/google-chrome.list
+                    # Download and install the correct GPG key
+                    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg
+                    # Add repository with proper keyring
                     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+                    # Clean apt cache and update
+                    apt-get clean
                     apt-get update
                     apt-get install -y google-chrome-stable || log_warn "Failed to install Google Chrome"
                     ;;
