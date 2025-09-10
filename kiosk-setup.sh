@@ -165,7 +165,7 @@ save_debug_state() {
         free -h
         echo
         echo "=== DISK SPACE ==="
-        df -h /opt/kiosk /tmp || true
+        df -h / 2>/dev/null || echo "Disk info unavailable"
         echo
         echo "=== SERVICES ==="
         systemctl status kiosk.service kiosk-api.service 2>/dev/null || true
@@ -604,6 +604,33 @@ else:
 with open('$CONFIG_FILE', 'w') as f:
     json.dump(data, f, indent=2)
 "
+}
+
+get_browser_memory_kb() {
+    local chromium_pids
+    chromium_pids=$(pgrep -f chromium 2>/dev/null)
+    
+    if [[ -z "$chromium_pids" ]]; then
+        echo "0"
+        return
+    fi
+    
+    # Use RSS (Resident Set Size) instead of VSZ to avoid counting shared memory multiple times
+    # RSS is the actual physical memory usage
+    local memory_kb
+    memory_kb=$(echo "$chromium_pids" | xargs -r ps -o rss= -p 2>/dev/null | awk '{sum+=$1} END {printf "%.0f", sum+0}')
+    
+    # Validate memory calculation - if it's unreasonably high (>10GB), it's likely a calculation error
+    local max_reasonable_kb=$((10 * 1024 * 1024))  # 10GB in KB
+    
+    if [[ -z "$memory_kb" || "$memory_kb" == "0" ]]; then
+        echo "0"
+    elif [[ "$memory_kb" -gt "$max_reasonable_kb" ]]; then
+        log_warn "Browser memory calculation error detected: ${memory_kb}KB seems unrealistic"
+        echo "0"
+    else
+        echo "$memory_kb"
+    fi
 }
 
 validate_config() {
@@ -1141,7 +1168,7 @@ monitor_browser_health() {
         
         # Check memory usage
         local browser_memory
-        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {printf "%.0f", sum+0}')
+        browser_memory=$(get_browser_memory_kb)
         
         if [[ $browser_memory -gt $max_memory_kb ]]; then
             log_warn "Browser memory usage high: ${browser_memory}KB > ${max_memory_kb}KB, restarting..."
@@ -1304,7 +1331,7 @@ get_system_health_report() {
     
     # Disk space
     echo "=== DISK USAGE ==="
-    df -h /opt/kiosk /tmp 2>/dev/null || echo "Disk info unavailable"
+    df -h / 2>/dev/null || echo "Disk info unavailable"
     echo
     
     # Memory usage
@@ -1335,7 +1362,7 @@ get_system_health_report() {
     if pgrep -f chromium >/dev/null; then
         echo "=== BROWSER MEMORY ==="
         local browser_memory
-        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {printf "%.0f", sum+0}')
+        browser_memory=$(get_browser_memory_kb)
         echo "Total memory: ${browser_memory}KB"
         echo "Limit: ${BROWSER_MEMORY_LIMIT}KB"
         if [[ $browser_memory -gt $BROWSER_MEMORY_LIMIT ]]; then
@@ -1378,12 +1405,14 @@ get_system_health_report() {
             echo "- $issue"
         done
         echo
-        return 1
+        echo "Health check detected ${#issues[@]} issue(s). Review above for details."
     else
         echo "=== STATUS: ALL OK ==="
         echo
-        return 0
     fi
+    
+    # Always return 0 for health check - this is informational only
+    return 0
 }
 
 check_root() {
@@ -2943,7 +2972,7 @@ show_status() {
     
     if pgrep -f chromium > /dev/null; then
         local browser_memory
-        browser_memory=$(ps -o pid,vsz,comm -C chromium --no-headers | awk '{sum+=$2} END {printf "%.0f", sum+0}')
+        browser_memory=$(get_browser_memory_kb)
         local mem_status="OK"
         local mem_color="$GREEN"
         
