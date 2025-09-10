@@ -2579,6 +2579,78 @@ run_setup() {
 # ==========================================
 
 main() {
+    # Check for one-line install mode (when no arguments and piped from curl)
+    if [[ -z "${1:-}" && "$0" =~ /dev/fd/ ]]; then
+        log_info "One-line installer detected"
+        if [[ $EUID -eq 0 ]]; then
+            log_info "Running as root, proceeding with setup..."
+            
+            # Save script to disk for future management
+            log_info "Saving kiosk.sh script for future use..."
+            curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk.sh -o /opt/kiosk.sh 2>/dev/null || {
+                log_warn "Could not download script for saving"
+            }
+            
+            chmod +x /opt/kiosk.sh 2>/dev/null || true
+            
+            # Create convenient symlink
+            ln -sf /opt/kiosk.sh /usr/local/bin/kiosk 2>/dev/null || true
+            
+            log_info "Running setup..."
+            run_setup
+            
+            echo
+            echo "============================================"
+            echo "    KIOSK INSTALLATION COMPLETE!"
+            echo "============================================"
+            echo "The script has been saved to: /opt/kiosk.sh"
+            echo "A convenient command has been created: kiosk"
+            echo
+            echo "After reboot, you can manage with:"
+            echo "  kiosk status"
+            echo "  kiosk set-url http://google.com"
+            echo "  kiosk playlist-add http://site.com 60"
+            echo "  kiosk help"
+            echo
+            echo "API will be available at: http://$(hostname -I | awk '{print $1}' 2>/dev/null || echo '<this-ip>')"
+            
+            local api_key
+            api_key=$(grep '"api_key"' "/opt/kiosk/api_config.json" 2>/dev/null | cut -d'"' -f4 || echo "check-after-reboot")
+            echo "API Key: $api_key"
+            echo "============================================"
+            echo
+            
+            log_info "System will reboot in 10 seconds..."
+            log_info "Press Ctrl+C to cancel reboot and reboot manually later"
+            for i in {10..1}; do
+                echo -n "$i... "
+                sleep 1
+            done
+            echo
+            log_info "Rebooting now..."
+            reboot
+        else
+            log_error "One-line install must be run as root!"
+            echo
+            echo "🚀 ONE-LINE KIOSK INSTALLER"
+            echo
+            echo "Use this command:"
+            echo "  sudo bash <(curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk.sh)"
+            echo
+            echo "This will:"
+            echo "  ✅ Install and configure complete kiosk system"
+            echo "  ✅ Set up automatic browser rotation with URL playlist"
+            echo "  ✅ Enable remote API management"  
+            echo "  ✅ Optimize for your hardware (x86/ARM/Raspberry Pi)"
+            echo "  ✅ Create systemd services"
+            echo "  ✅ Save management script for future use"
+            echo "  ✅ Auto-reboot when complete"
+            echo
+            exit 1
+        fi
+        return
+    fi
+    
     # Enable error handling for all operations
     set -eE
     trap 'handle_error $? $LINENO "$BASH_COMMAND"' ERR

@@ -32,11 +32,7 @@ sudo apt install x11-utils
 
 Download and run in one command
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/vm/debian-vm.sh)"
-# Download and run in one command
 bash <(curl -s https://raw.githubusercontent.com/zitlem/Kiosk-URL/master/kiosk.sh)
-
-
 ```
 
 ```bash
