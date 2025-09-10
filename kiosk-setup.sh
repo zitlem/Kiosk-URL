@@ -17,7 +17,7 @@ set -e  # Exit on error
 
 KIOSK_USER="kiosk"
 INSTALL_DIR="/opt/kiosk"
-CONFIG_FILE="$INSTALL_DIR/config/kiosk.json"
+CONFIG_FILE="$INSTALL_DIR/kiosk.json"
 SERVICE_FILE="/etc/systemd/system/kiosk.service"
 API_SERVICE_FILE="/etc/systemd/system/kiosk-api.service"
 SETUP_MARKER="$INSTALL_DIR/.setup_complete"
@@ -65,7 +65,6 @@ ARM_PACKAGES=(
 
 X86_PACKAGES=(
     "chromium-browser"
-    "google-chrome-stable"
 )
 
 PYTHON_PACKAGES=(
@@ -1489,24 +1488,6 @@ install_x86_packages() {
                         snap install chromium || log_error "Failed to install chromium"
                     fi
                     ;;
-                "google-chrome-stable")
-                    log_info "Adding Google Chrome repository..."
-                    # Ensure gnupg is installed first
-                    apt-get install -y gnupg ca-certificates curl || true
-                    # Remove old repository if it exists
-                    rm -f /etc/apt/sources.list.d/google-chrome.list
-                    # Create keyring directory
-                    mkdir -p /usr/share/keyrings
-                    # Download and install the GPG key
-                    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub > /tmp/google-chrome.key
-                    gpg --dearmor < /tmp/google-chrome.key > /usr/share/keyrings/google-chrome-keyring.gpg 2>/dev/null
-                    rm -f /tmp/google-chrome.key
-                    # Add repository with proper keyring
-                    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
-                    # Update and install
-                    apt-get update
-                    apt-get install -y google-chrome-stable || log_warn "Failed to install Google Chrome, continuing with Chromium"
-                    ;;
             esac
         fi
     done
@@ -1537,8 +1518,6 @@ detect_chromium_path() {
         )
     else
         possible_paths=(
-            "/usr/bin/google-chrome"
-            "/usr/bin/google-chrome-stable"
             "/usr/bin/chromium-browser"
             "/usr/bin/chromium"
             "/snap/bin/chromium"
@@ -1557,10 +1536,6 @@ detect_chromium_path() {
         CHROMIUM_PATH=$(which chromium)
         log_info "Found Chromium via which: $CHROMIUM_PATH"
         return 0
-    elif command -v google-chrome &> /dev/null; then
-        CHROMIUM_PATH=$(which google-chrome)
-        log_info "Found Google Chrome via which: $CHROMIUM_PATH"
-        return 0
     fi
     
     log_error "No supported browser found!"
@@ -1570,7 +1545,6 @@ detect_chromium_path() {
 create_directories() {
     log_info "Creating directory structure..."
     mkdir -p "$INSTALL_DIR"
-    mkdir -p "$(dirname "$CONFIG_FILE")"  # Create /opt/kiosk/config
     mkdir -p "/etc/X11/xorg.conf.d"
     mkdir -p "/etc/systemd/system/getty@tty1.service.d"
 }
@@ -1760,6 +1734,52 @@ kiosk debug
 
 # Test API endpoints
 kiosk test-api
+```
+
+### Browser Maintenance
+
+```bash
+# Check which Chromium installation method is used
+kiosk version    # Shows installation method and correct update command
+
+# Check current Chromium version
+chromium --version 2>/dev/null || chromium-browser --version 2>/dev/null || echo "Chromium not found"
+
+# === UPDATE CHROMIUM ===
+
+# For APT installation (Debian/Ubuntu 20.04 and earlier):
+if dpkg -l | grep -q chromium; then
+    sudo apt update
+    sudo apt upgrade chromium-browser -y
+    sudo kiosk restart
+fi
+
+# For Snap installation (Ubuntu 22.04+):
+if command -v snap list chromium &>/dev/null && snap list chromium &>/dev/null; then
+    sudo snap refresh chromium
+    sudo kiosk restart
+fi
+
+# === TROUBLESHOOTING ===
+
+# Force reinstall Chromium (APT method)
+if dpkg -l | grep -q chromium; then
+    sudo apt remove chromium-browser -y
+    sudo apt install chromium-browser -y
+fi
+
+# Force reinstall Chromium (Snap method)  
+if command -v snap list chromium &>/dev/null && snap list chromium &>/dev/null; then
+    sudo snap remove chromium
+    sudo snap install chromium
+fi
+
+# Clear Chromium cache and data (run as kiosk user)
+sudo -u kiosk rm -rf /opt/kiosk/.cache/chromium/ 2>/dev/null
+sudo -u kiosk rm -rf /opt/kiosk/.config/chromium/ 2>/dev/null
+
+# Restart kiosk after browser maintenance
+sudo kiosk restart
 ```
 
 ## Remote API Usage
@@ -2715,7 +2735,7 @@ print_setup_info() {
     echo "Screen blanking disabled"
     echo
     echo "FILES CREATED:"
-    echo "   Config: $INSTALL_DIR/config/kiosk.json"
+    echo "   Config: $CONFIG_FILE"
     echo "   Usage:  $INSTALL_DIR/USAGE_EXAMPLES.md"
     echo
     echo "API CONFIGURATION:"
@@ -3434,6 +3454,17 @@ main() {
             [[ "$IS_ARM" == true ]] && echo "ARM optimizations: Enabled"
             [[ "$IS_RPI" == true ]] && echo "Raspberry Pi optimizations: Enabled"
             echo "Browser path: ${CHROMIUM_PATH:-"Not detected"}"
+            
+            # Detect browser installation method
+            if command -v snap >/dev/null 2>&1 && snap list chromium >/dev/null 2>&1; then
+                echo "Browser installation: Snap"
+                echo "Update command: sudo snap refresh chromium"
+            elif dpkg -l 2>/dev/null | grep -q chromium; then
+                echo "Browser installation: APT"  
+                echo "Update command: sudo apt update && sudo apt upgrade chromium-browser -y"
+            else
+                echo "Browser installation: Unknown"
+            fi
             ;;
         "help"|"--help"|"-h")
             show_help
