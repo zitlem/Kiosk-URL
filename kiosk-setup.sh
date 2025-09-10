@@ -1570,6 +1570,7 @@ detect_chromium_path() {
 create_directories() {
     log_info "Creating directory structure..."
     mkdir -p "$INSTALL_DIR"
+    mkdir -p "$(dirname "$CONFIG_FILE")"  # Create /opt/kiosk/config
     mkdir -p "/etc/X11/xorg.conf.d"
     mkdir -p "/etc/systemd/system/getty@tty1.service.d"
 }
@@ -2091,6 +2092,8 @@ EOF
     
     log_info "Usage examples file created at $INSTALL_DIR/USAGE_EXAMPLES.md"
 }
+
+create_kiosk_script() {
     log_info "Creating kiosk startup script..."
     
     cat > "$INSTALL_DIR/start_kiosk.sh" << EOF
@@ -3153,7 +3156,6 @@ run_setup() {
     
     log_title "Setting up Configuration"
     create_directories
-    create_api_config
     create_default_configs
     create_usage_examples
     
