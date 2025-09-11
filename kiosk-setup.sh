@@ -555,18 +555,28 @@ get_config_value() {
     local key_path="$1"
     local default_value="${2:-}"
     
+    # Use environment variables to safely pass values to Python
+    export KIOSK_KEY_PATH="$key_path"
+    export KIOSK_DEFAULT_VALUE="$default_value"
+    
     get_config | python3 -c "
-import json, sys
+import json, sys, os
 try:
+    key_path = os.environ['KIOSK_KEY_PATH']
+    default_value = os.environ['KIOSK_DEFAULT_VALUE']
+    
     data = json.load(sys.stdin)
-    keys = '$key_path'.split('.')
+    keys = key_path.split('.')
     value = data
     for key in keys:
         value = value[key]
     print(value)
 except:
-    print('$default_value')
+    print(default_value)
 "
+    
+    # Clean up environment variables
+    unset KIOSK_KEY_PATH KIOSK_DEFAULT_VALUE
 }
 
 set_config_value() {
@@ -899,47 +909,28 @@ except Exception as e:
             if [[ -n "$tab_info" ]]; then
                 log_debug "Found tab ID: $tab_info, sending navigation command"
                 
-                # Use the correct Chrome DevTools Protocol WebSocket endpoint
-                # Method 1: Try Runtime.evaluate with specific tab
-                local nav_result
-                nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json/runtime/evaluate/$tab_info" \
-                    -H "Content-Type: application/json" \
-                    -d '{"method":"Runtime.evaluate","params":{"expression":"window.location.href = '\'''"$url"''\'';"}}' 2>/dev/null)
+                # Method 1: Close current tab and open new one (most reliable)
+                log_debug "Trying tab replacement method"
                 
-                log_debug "Runtime.evaluate result: $nav_result"
+                # Close the current tab
+                local close_result
+                close_result=$(curl -s "http://localhost:$DEBUG_PORT/json/close/$tab_info" 2>/dev/null)
+                log_debug "Tab close result: $close_result"
                 
-                # Method 2: If Runtime.evaluate doesn't work, try Page.navigate
-                if echo "$nav_result" | grep -q "Unknown command\|error\|404"; then
-                    log_debug "Trying Page.navigate method"
-                    
-                    nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json" \
-                        -H "Content-Type: application/json" \
-                        -d '{"id":1,"method":"Page.navigate","params":{"url":"'"$url"'"}}' 2>/dev/null)
-                    
-                    log_debug "Page.navigate result: $nav_result"
-                fi
+                sleep 1
                 
-                # Method 3: Simple navigation via tab-specific endpoint
-                if echo "$nav_result" | grep -q "Unknown command\|error\|404"; then
-                    log_debug "Trying simple tab navigation"
-                    
-                    nav_result=$(curl -s "http://localhost:$DEBUG_PORT/json/activate/$tab_info" 2>/dev/null)
-                    sleep 0.5
-                    nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json/runtime/evaluate" \
-                        -H "Content-Type: application/json" \
-                        -d '{"expression":"window.location.replace('\'''"$url"'\'')"}' 2>/dev/null)
-                    
-                    log_debug "Simple navigation result: $nav_result"
-                fi
+                # Open new tab with the URL
+                local new_tab_result  
+                new_tab_result=$(curl -s "http://localhost:$DEBUG_PORT/json/new?$url" 2>/dev/null)
+                log_debug "New tab result: $new_tab_result"
                 
-                # Check if navigation was successful
-                if ! echo "$nav_result" | grep -q "Unknown command\|error\|404"; then
+                if [[ -n "$new_tab_result" ]]; then
                     log_info "Successfully navigated browser to: $url"
                     return 0
-                else
-                    log_warn "All DevTools navigation methods failed"
-                    return 1
                 fi
+                
+                log_warn "All DevTools navigation methods failed"
+                return 1
             else
                 log_warn "Could not get tab information from DevTools"
             fi
