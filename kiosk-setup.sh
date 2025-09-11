@@ -539,14 +539,74 @@ create_default_config() {
 
 get_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
+        log_debug "Config file doesn't exist, creating default"
+        create_default_config
+    fi
+    
+    # Check if file is empty or corrupted
+    if [[ ! -s "$CONFIG_FILE" ]]; then
+        log_warn "Config file is empty, recreating"
         create_default_config
     fi
     
     if validate_config >/dev/null 2>&1; then
         cat "$CONFIG_FILE"
     else
-        log_warn "Invalid config, using default"
+        log_warn "Invalid config detected, attempting to repair"
+        
+        # Try to salvage existing settings before recreating
+        local backup_content=""
+        if [[ -f "$CONFIG_FILE" ]] && [[ -s "$CONFIG_FILE" ]]; then
+            backup_content=$(cat "$CONFIG_FILE" 2>/dev/null || echo "")
+        fi
+        
+        # Create default config structure
         create_default_config
+        
+        # If we had backup content, try to merge valid JSON parts
+        if [[ -n "$backup_content" ]]; then
+            log_debug "Attempting to merge existing settings"
+            
+            # Use Python to safely merge any valid JSON from backup
+            python3 -c "
+import json
+import sys
+
+try:
+    # Load the new default config
+    with open('$CONFIG_FILE', 'r') as f:
+        default_config = json.load(f)
+    
+    # Try to parse backup content
+    backup_content = '''$backup_content'''
+    
+    try:
+        backup_config = json.loads(backup_content)
+        
+        # Merge non-conflicting settings from backup
+        for key, value in backup_config.items():
+            if key not in ['kiosk', 'playlist']:  # Preserve other settings
+                default_config[key] = value
+            elif isinstance(value, dict) and key in default_config:
+                # Merge nested settings carefully
+                for subkey, subvalue in value.items():
+                    if subkey not in default_config[key]:
+                        default_config[key][subkey] = subvalue
+        
+        # Write merged config
+        with open('$CONFIG_FILE', 'w') as f:
+            json.dump(default_config, f, indent=2)
+            
+        print('Merged settings from backup', file=sys.stderr)
+        
+    except json.JSONDecodeError:
+        print('Backup config invalid, using defaults', file=sys.stderr)
+        
+except Exception as e:
+    print(f'Merge failed: {e}', file=sys.stderr)
+" 2>/dev/null
+        fi
+        
         cat "$CONFIG_FILE"
     fi
 }
@@ -565,13 +625,19 @@ try:
     key_path = os.environ['KIOSK_KEY_PATH']
     default_value = os.environ['KIOSK_DEFAULT_VALUE']
     
+    print(f'DEBUG get_config_value: Looking for {key_path}, default={default_value}', file=sys.stderr)
+    
     data = json.load(sys.stdin)
+    print(f'DEBUG get_config_value: Loaded config data: {data}', file=sys.stderr)
+    
     keys = key_path.split('.')
     value = data
     for key in keys:
         value = value[key]
+    print(f'DEBUG get_config_value: Found value: {value}', file=sys.stderr)
     print(value)
-except:
+except Exception as e:
+    print(f'DEBUG get_config_value: Exception {e}, using default: {default_value}', file=sys.stderr)
     print(default_value)
 "
     
@@ -630,13 +696,27 @@ try:
         current[keys[-1]] = new_value
 
     print(f'DEBUG: Writing to {config_file}', file=sys.stderr)
-    with open(config_file, 'w') as f:
+    
+    # Write to temporary file first, then move to prevent corruption
+    import tempfile
+    import os
+    
+    temp_file = config_file + '.tmp'
+    with open(temp_file, 'w') as f:
         json.dump(data, f, indent=2)
+    
+    # Verify the temp file is valid JSON
+    with open(temp_file, 'r') as f:
+        json.load(f)  # This will raise an exception if invalid
+    
+    # Replace the original file
+    os.replace(temp_file, config_file)
     print(f'DEBUG: Successfully updated config', file=sys.stderr)
     
 except Exception as e:
     print(f'ERROR: Failed to update config: {e}', file=sys.stderr)
-    sys.exit(1)
+    # Don't exit - that might be causing corruption, just report the error
+    print('FAILED')
 " || {
         log_error "Failed to update configuration file"
         return 1
@@ -910,7 +990,7 @@ except Exception as e:
                 log_debug "Found tab ID: $tab_info, sending navigation command"
                 
                 # Method 1: Navigate using Chrome's Runtime.evaluate with proper syntax
-                log_debug "Trying Runtime.evaluate navigation"
+                log_debug "Trying Runtime.evaluate navigation [NEW VERSION 2.0]"
                 
                 # Safely pass URL to Python to avoid quoting issues
                 export NAVIGATE_URL="$url"
@@ -920,55 +1000,227 @@ import json
 import urllib.request
 import urllib.parse
 import os
+import sys
 
 url_to_navigate = os.environ['NAVIGATE_URL']
 tab_id = '$tab_info'
 debug_port = '$DEBUG_PORT'
 
+print(f'DEBUG: Navigating to {url_to_navigate} on tab {tab_id} port {debug_port}', file=sys.stderr)
+
+# Method 1: Simple HTTP-based navigation for Chromium
 try:
-    # Use Runtime.evaluate to navigate
-    command = {
-        'id': 1,
-        'method': 'Runtime.evaluate',
-        'params': {
-            'expression': f'window.location.href = \'{url_to_navigate}\';'
-        }
-    }
+    # Method 1a: Try direct URL navigation via GET to /json/new
+    encoded_url = urllib.parse.quote(url_to_navigate, safe='')
+    new_tab_url = f'http://localhost:{debug_port}/json/new?{encoded_url}'
+    print(f'DEBUG: Trying GET new tab: {new_tab_url}', file=sys.stderr)
     
-    data = json.dumps(command).encode('utf-8')
-    req = urllib.request.Request(
-        f'http://localhost:{debug_port}/json/runtime/evaluate',
-        data=data,
-        headers={'Content-Type': 'application/json'}
-    )
-    
+    req = urllib.request.Request(new_tab_url)
     with urllib.request.urlopen(req, timeout=5) as response:
-        result = json.loads(response.read().decode())
-        if 'result' in result or 'id' in result:
+        new_result = response.read().decode()
+        print(f'DEBUG: New tab response: {new_result}', file=sys.stderr)
+        
+        if new_result and ('id' in new_result or 'webSocketDebuggerUrl' in new_result):
+            # Close the old tab after successful creation
+            try:
+                close_url = f'http://localhost:{debug_port}/json/close/{tab_id}'
+                close_req = urllib.request.Request(close_url)
+                urllib.request.urlopen(close_req, timeout=2)
+                print(f'DEBUG: Closed old tab {tab_id}', file=sys.stderr)
+            except:
+                pass  # Don't fail if close doesn't work
             print('SUCCESS')
         else:
-            print('FAILED')
+            raise Exception('New tab creation failed')
             
 except Exception as e:
-    # Fallback: try opening new tab with correct format
+    print(f'DEBUG: Method 1a failed: {e}', file=sys.stderr)
+    
+    # Method 1b: Try activate existing tab + navigate via runtime
     try:
-        encoded_url = urllib.parse.quote(url_to_navigate, safe=':/?#[]@!$&\'()*+,;=')
-        req = urllib.request.Request(f'http://localhost:{debug_port}/json/new?{encoded_url}')
+        # Activate the tab first
+        activate_url = f'http://localhost:{debug_port}/json/activate/{tab_id}'
+        print(f'DEBUG: Activating tab: {activate_url}', file=sys.stderr)
         
+        req = urllib.request.Request(activate_url)
+        urllib.request.urlopen(req, timeout=5)
+        
+        import time
+        time.sleep(0.2)
+        
+        # Now try to navigate via runtime evaluate using GET
+        # Use double quotes to avoid single quote escaping issues
+        js_code = f'window.location.href="{url_to_navigate}";'
+        encoded_js = urllib.parse.quote(js_code)
+        eval_url = f'http://localhost:{debug_port}/json/runtime/evaluate?expression={encoded_js}'
+        print(f'DEBUG: Runtime evaluate: {eval_url}', file=sys.stderr)
+        
+        req = urllib.request.Request(eval_url)
         with urllib.request.urlopen(req, timeout=5) as response:
-            result = response.read().decode()
-            if result and 'id' in result:
-                print('SUCCESS')
-            else:
-                print('FAILED')
-    except:
-        print('FAILED')
-" 2>/dev/null)
+            eval_result = response.read().decode()
+            print(f'DEBUG: Evaluate response: {eval_result}', file=sys.stderr)
+            print('SUCCESS')
+            
+    except Exception as e2:
+        print(f'DEBUG: Method 1b failed: {e2}', file=sys.stderr)
+        
+        # Method 1c: Simple approach - just create new tab without closing old one
+        try:
+            simple_url = f'http://localhost:{debug_port}/json/new'
+            print(f'DEBUG: Simple new tab: {simple_url}', file=sys.stderr)
+            
+            req = urllib.request.Request(simple_url, method='PUT')
+            req.add_header('Content-Type', 'text/plain')
+            
+            with urllib.request.urlopen(req, data=url_to_navigate.encode('utf-8'), timeout=5) as response:
+                simple_result = response.read().decode()
+                print(f'DEBUG: Simple response: {simple_result}', file=sys.stderr)
+                
+                if simple_result and ('id' in simple_result):
+                    # Parse the new tab info and navigate it via WebSocket
+                    import json as json_module
+                    new_tab_data = json_module.loads(simple_result)
+                    new_tab_id = new_tab_data['id']
+                    
+                    # Close the old tab to ensure only one tab is open
+                    try:
+                        close_url = f'http://localhost:{debug_port}/json/close/{tab_id}'
+                        close_req = urllib.request.Request(close_url)
+                        urllib.request.urlopen(close_req, timeout=2)
+                        print(f'DEBUG: Closed old tab {tab_id}', file=sys.stderr)
+                    except:
+                        pass  # Don't fail if close doesn't work
+                    
+                    # Now use WebSocket to navigate this new tab
+                    try:
+                        print(f'DEBUG: Attempting to import websocket library', file=sys.stderr)
+                        import websocket
+                        print(f'DEBUG: WebSocket library imported successfully', file=sys.stderr)
+                        
+                        ws_url = f'ws://localhost:{debug_port}/devtools/page/{new_tab_id}'
+                        print(f'DEBUG: Using WebSocket to navigate new tab: {ws_url}', file=sys.stderr)
+                        
+                        def on_open(ws):
+                            print(f'DEBUG: WebSocket connection opened', file=sys.stderr)
+                            # First enable Page domain
+                            enable_cmd = {
+                                'id': 1,
+                                'method': 'Page.enable'
+                            }
+                            print(f'DEBUG: Sending Page.enable command', file=sys.stderr)
+                            ws.send(json_module.dumps(enable_cmd))
+                            
+                            # Then navigate
+                            nav_cmd = {
+                                'id': 2,
+                                'method': 'Page.navigate',
+                                'params': {'url': url_to_navigate}
+                            }
+                            print(f'DEBUG: Sending Page.navigate command to {url_to_navigate}', file=sys.stderr)
+                            ws.send(json_module.dumps(nav_cmd))
+                        
+                        def on_error(ws, error):
+                            print(f'DEBUG: WebSocket error: {error}', file=sys.stderr)
+                            # Don't print FAILED here - let the exception handler deal with it
+                        
+                        def on_close(ws, close_status_code, close_msg):
+                            print(f'DEBUG: WebSocket closed: {close_status_code} {close_msg}', file=sys.stderr)
+                        
+                        def on_message(ws, message):
+                            result = json_module.loads(message)
+                            print(f'DEBUG: WebSocket response: {result}', file=sys.stderr)
+                            if 'result' in result and result.get('id') == 2:
+                                # This is the response to our navigate command
+                                print('SUCCESS')
+                                ws.close()
+                            elif 'error' in result:
+                                print('FAILED')
+                                ws.close()
+                        
+                        print(f'DEBUG: Creating WebSocket connection', file=sys.stderr)
+                        ws = websocket.WebSocketApp(ws_url, 
+                            on_open=on_open, 
+                            on_message=on_message,
+                            on_error=on_error,
+                            on_close=on_close)
+                        print(f'DEBUG: Starting WebSocket connection', file=sys.stderr)
+                        ws.run_forever()
+                        print(f'DEBUG: WebSocket run_forever completed', file=sys.stderr)
+                        
+                        # If we get here and no SUCCESS was printed, WebSocket failed
+                        raise Exception('WebSocket navigation failed')
+                        
+                    except ImportError:
+                        print(f'DEBUG: WebSocket library not available', file=sys.stderr)
+                        # Fallback: try a simple HTTP-based navigation on the new tab
+                        try:
+                            # Try to use a direct navigation approach
+                            time.sleep(0.5)  # Give the new tab time to initialize
+                            
+                            # Method: Send navigation via the tab's specific endpoint
+                            nav_url = f'http://localhost:{debug_port}/json/runtime/evaluate'
+                            nav_data = {
+                                'expression': f'window.location.href = \"{url_to_navigate}\";'
+                            }
+                            
+                            import json as json_mod
+                            data = json_mod.dumps(nav_data).encode('utf-8')
+                            req = urllib.request.Request(nav_url, data=data, headers={'Content-Type': 'application/json'})
+                            
+                            with urllib.request.urlopen(req, timeout=5) as response:
+                                result = response.read().decode()
+                                print(f'DEBUG: HTTP navigation response: {result}', file=sys.stderr)
+                                if result and not 'error' in result.lower():
+                                    print('SUCCESS')
+                                else:
+                                    print('FAILED')
+                        except Exception as fallback_error:
+                            print(f'DEBUG: HTTP fallback failed: {fallback_error}', file=sys.stderr)
+                            print('FAILED')
+                    except Exception as ws_error:
+                        print(f'DEBUG: WebSocket error: {ws_error}', file=sys.stderr)
+                        print(f'DEBUG: Trying HTTP fallback method', file=sys.stderr)
+                        # Fallback: try a simple HTTP-based navigation on the new tab
+                        try:
+                            # Try to use a direct navigation approach
+                            import time
+                            time.sleep(0.5)  # Give the new tab time to initialize
+                            
+                            # Method: Send navigation via the tab's specific endpoint
+                            nav_url = f'http://localhost:{debug_port}/json/runtime/evaluate'
+                            nav_data = {
+                                'expression': f'window.location.href = \"{url_to_navigate}\";'
+                            }
+                            
+                            import json as json_mod
+                            data = json_mod.dumps(nav_data).encode('utf-8')
+                            req = urllib.request.Request(nav_url, data=data, headers={'Content-Type': 'application/json'})
+                            
+                            with urllib.request.urlopen(req, timeout=5) as response:
+                                result = response.read().decode()
+                                print(f'DEBUG: HTTP navigation response: {result}', file=sys.stderr)
+                                if result and not 'error' in result.lower():
+                                    print('SUCCESS')
+                                else:
+                                    print('FAILED')
+                        except Exception as fallback_error:
+                            print(f'DEBUG: HTTP fallback failed: {fallback_error}', file=sys.stderr)
+                            print('FAILED')
+                else:
+                    raise Exception('Simple method failed')
+                    
+        except Exception as e3:
+            print(f'DEBUG: Method 1c failed: {e3}', file=sys.stderr)
+    
+# All methods attempted, if we get here it means all failed
+print('FAILED')
+" 2>&1)
                 unset NAVIGATE_URL
                 
                 log_debug "Navigation result: $nav_result"
                 
-                if [[ "$nav_result" == "SUCCESS" ]]; then
+                # Check if any line contains SUCCESS
+                if echo "$nav_result" | grep -q "SUCCESS"; then
                     log_info "Successfully navigated browser to: $url"
                     return 0
                 fi
@@ -1361,13 +1613,13 @@ start_browser_process() {
     # Start browser with architecture-specific flags
     local browser_cmd
     if [[ "$IS_ARM" == true ]]; then
-        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --display=:0 --remote-debugging-port=$DEBUG_PORT --user-data-dir=/tmp/chromium-kiosk"
+        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
         
         if [[ "$IS_RPI" == true ]]; then
             browser_cmd="$browser_cmd --disable-features=VizDisplayCompositor --disable-smooth-scrolling --disable-2d-canvas-clip-aa --disable-canvas-aa --disable-accelerated-2d-canvas"
         fi
     else
-        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --display=:0 --remote-debugging-port=$DEBUG_PORT --user-data-dir=/tmp/chromium-kiosk"
+        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
     fi
     
     browser_cmd="$browser_cmd \"$url\""
@@ -2378,13 +2630,13 @@ fi
 
 # Architecture-specific browser flags
 if [[ "$IS_ARM" == true ]]; then
-    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --display=:0 --remote-debugging-port=$DEBUG_PORT --user-data-dir=/tmp/chromium-kiosk"
+    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
     
     if [[ "$IS_RPI" == true ]]; then
         BROWSER_FLAGS="\$BROWSER_FLAGS --disable-features=VizDisplayCompositor --disable-smooth-scrolling --disable-2d-canvas-clip-aa --disable-canvas-aa --disable-accelerated-2d-canvas"
     fi
 else
-    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --display=:0 --remote-debugging-port=$DEBUG_PORT --user-data-dir=/tmp/chromium-kiosk"
+    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
 fi
 
 # Start browser with architecture-specific flags
@@ -2927,7 +3179,11 @@ print_setup_info() {
 # ==========================================
 
 get_url() {
-    get_config_value "kiosk.url" "http://example.com"
+    log_debug "Getting URL from config file: $CONFIG_FILE"
+    local result
+    result=$(get_config_value "kiosk.url" "http://example.com")
+    log_debug "Retrieved URL: $result"
+    echo "$result"
 }
 
 set_url() {
