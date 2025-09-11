@@ -842,24 +842,42 @@ navigate_browser_to_url() {
     
     # Use Chrome DevTools Protocol to navigate
     if command -v curl >/dev/null; then
-        local tab_info
-        tab_info=$(curl -s "http://localhost:$DEBUG_PORT/json" 2>/dev/null | python3 -c "
+        log_debug "Attempting DevTools navigation to: $url"
+        
+        # Test DevTools connectivity first
+        local devtools_test
+        devtools_test=$(curl -s --connect-timeout 2 "http://localhost:$DEBUG_PORT/json" 2>/dev/null)
+        
+        if [[ -z "$devtools_test" ]]; then
+            log_warn "DevTools not accessible on port $DEBUG_PORT"
+        else
+            log_debug "DevTools accessible, getting tab info"
+            
+            local tab_info
+            tab_info=$(echo "$devtools_test" | python3 -c "
 import json, sys
 try:
     tabs = json.load(sys.stdin)
     if tabs:
         print(tabs[0]['id'])
-except:
-    pass
+except Exception as e:
+    print('ERROR: ' + str(e), file=sys.stderr)
 " 2>/dev/null)
-        
-        if [[ -n "$tab_info" ]]; then
-            curl -s -X POST "http://localhost:$DEBUG_PORT/json/runtime/evaluate" \
-                -H "Content-Type: application/json" \
-                -d "{\"expression\": \"window.location.href = '$url'\"}" >/dev/null 2>&1
             
-            log_debug "Navigated browser to: $url"
-            return 0
+            if [[ -n "$tab_info" ]]; then
+                log_debug "Found tab ID: $tab_info, sending navigation command"
+                
+                local nav_result
+                nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json/runtime/evaluate" \
+                    -H "Content-Type: application/json" \
+                    -d "{\"expression\": \"window.location.href = '$url'\"}" 2>/dev/null)
+                
+                log_debug "Navigation result: $nav_result"
+                log_info "Successfully navigated browser to: $url"
+                return 0
+            else
+                log_warn "Could not get tab information from DevTools"
+            fi
         fi
     fi
     
@@ -2394,18 +2412,35 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import threading
 
-CONFIG_FILE = "/opt/kiosk/config/kiosk.json"
+CONFIG_FILE = "/opt/kiosk/kiosk.json"
 
 def load_config():
     try:
         with open(CONFIG_FILE, 'r') as f:
             return json.load(f)
     except:
-        return {
+        # If config file is missing, create a new one with generated API key
+        import subprocess
+        import secrets
+        import string
+        
+        # Generate a proper API key
+        api_key = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+        
+        default_config = {
             "kiosk": {"url": "http://example.com", "rotation": "normal"},
-            "api": {"api_key": "default-key", "port": 80},
+            "api": {"api_key": api_key, "port": 80},
             "playlist": {"enabled": False, "default_display_time": 30, "urls": []}
         }
+        
+        # Save the config file
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(default_config, f, indent=2)
+        except:
+            pass
+            
+        return default_config
 
 def check_auth(handler):
     config = load_config()
