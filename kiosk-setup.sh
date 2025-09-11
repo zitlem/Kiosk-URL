@@ -568,17 +568,22 @@ get_config() {
             log_debug "Attempting to merge existing settings"
             
             # Use Python to safely merge any valid JSON from backup
+            export KIOSK_CONFIG_FILE="$CONFIG_FILE"
+            export KIOSK_BACKUP_CONTENT="$backup_content"
             python3 -c "
 import json
 import sys
+import os
 
 try:
+    config_file = os.environ['KIOSK_CONFIG_FILE']
+    backup_content = os.environ['KIOSK_BACKUP_CONTENT']
+    
     # Load the new default config
-    with open('$CONFIG_FILE', 'r') as f:
+    with open(config_file, 'r') as f:
         default_config = json.load(f)
     
     # Try to parse backup content
-    backup_content = '''$backup_content'''
     
     try:
         backup_config = json.loads(backup_content)
@@ -594,7 +599,7 @@ try:
                         default_config[key][subkey] = subvalue
         
         # Write merged config
-        with open('$CONFIG_FILE', 'w') as f:
+        with open(config_file, 'w') as f:
             json.dump(default_config, f, indent=2)
             
         print('Merged settings from backup', file=sys.stderr)
@@ -760,10 +765,13 @@ validate_config() {
         return 1
     fi
     
+    export KIOSK_CONFIG_FILE="$CONFIG_FILE"
     python3 -c "
 import json
+import os
 try:
-    with open('$CONFIG_FILE', 'r') as f:
+    config_file = os.environ['KIOSK_CONFIG_FILE']
+    with open(config_file, 'r') as f:
         data = json.load(f)
     
     # Validate required sections
