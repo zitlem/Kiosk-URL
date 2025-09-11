@@ -867,14 +867,47 @@ except Exception as e:
             if [[ -n "$tab_info" ]]; then
                 log_debug "Found tab ID: $tab_info, sending navigation command"
                 
+                # Use the correct Chrome DevTools Protocol WebSocket endpoint
+                # Method 1: Try Runtime.evaluate with specific tab
                 local nav_result
-                nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json/runtime/evaluate" \
+                nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json/runtime/evaluate/$tab_info" \
                     -H "Content-Type: application/json" \
-                    -d "{\"expression\": \"window.location.href = '$url'\"}" 2>/dev/null)
+                    -d '{"method":"Runtime.evaluate","params":{"expression":"window.location.href = '\'''"$url"''\'';"}}' 2>/dev/null)
                 
-                log_debug "Navigation result: $nav_result"
-                log_info "Successfully navigated browser to: $url"
-                return 0
+                log_debug "Runtime.evaluate result: $nav_result"
+                
+                # Method 2: If Runtime.evaluate doesn't work, try Page.navigate
+                if echo "$nav_result" | grep -q "Unknown command\|error\|404"; then
+                    log_debug "Trying Page.navigate method"
+                    
+                    nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json" \
+                        -H "Content-Type: application/json" \
+                        -d '{"id":1,"method":"Page.navigate","params":{"url":"'"$url"'"}}' 2>/dev/null)
+                    
+                    log_debug "Page.navigate result: $nav_result"
+                fi
+                
+                # Method 3: Simple navigation via tab-specific endpoint
+                if echo "$nav_result" | grep -q "Unknown command\|error\|404"; then
+                    log_debug "Trying simple tab navigation"
+                    
+                    nav_result=$(curl -s "http://localhost:$DEBUG_PORT/json/activate/$tab_info" 2>/dev/null)
+                    sleep 0.5
+                    nav_result=$(curl -s -X POST "http://localhost:$DEBUG_PORT/json/runtime/evaluate" \
+                        -H "Content-Type: application/json" \
+                        -d '{"expression":"window.location.replace('\'''"$url"'\'')"}' 2>/dev/null)
+                    
+                    log_debug "Simple navigation result: $nav_result"
+                fi
+                
+                # Check if navigation was successful
+                if ! echo "$nav_result" | grep -q "Unknown command\|error\|404"; then
+                    log_info "Successfully navigated browser to: $url"
+                    return 0
+                else
+                    log_warn "All DevTools navigation methods failed"
+                    return 1
+                fi
             else
                 log_warn "Could not get tab information from DevTools"
             fi
