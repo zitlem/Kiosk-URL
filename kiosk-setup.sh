@@ -575,15 +575,26 @@ set_config_value() {
     
     backup_config
     
+    # Use environment variables to safely pass values to Python
+    export KIOSK_CONFIG_FILE="$CONFIG_FILE"
+    export KIOSK_KEY_PATH="$key_path"
+    export KIOSK_NEW_VALUE="$new_value"
+    
     python3 -c "
 import json
+import os
+
+config_file = os.environ['KIOSK_CONFIG_FILE']
+key_path = os.environ['KIOSK_KEY_PATH']
+new_value = os.environ['KIOSK_NEW_VALUE']
+
 try:
-    with open('$CONFIG_FILE', 'r') as f:
+    with open(config_file, 'r') as f:
         data = json.load(f)
 except:
     data = {}
 
-keys = '$key_path'.split('.')
+keys = key_path.split('.')
 current = data
 for key in keys[:-1]:
     if key not in current:
@@ -591,19 +602,21 @@ for key in keys[:-1]:
     current = current[key]
 
 # Handle different value types
-value = '$new_value'
-if value.lower() == 'true':
+if new_value.lower() == 'true':
     current[keys[-1]] = True
-elif value.lower() == 'false': 
+elif new_value.lower() == 'false': 
     current[keys[-1]] = False
-elif value.isdigit():
-    current[keys[-1]] = int(value)
+elif new_value.isdigit():
+    current[keys[-1]] = int(new_value)
 else:
-    current[keys[-1]] = value
+    current[keys[-1]] = new_value
 
-with open('$CONFIG_FILE', 'w') as f:
+with open(config_file, 'w') as f:
     json.dump(data, f, indent=2)
 "
+    
+    # Clean up environment variables
+    unset KIOSK_CONFIG_FILE KIOSK_KEY_PATH KIOSK_NEW_VALUE
 }
 
 get_browser_memory_kb() {
