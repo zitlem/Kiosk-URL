@@ -539,13 +539,11 @@ create_default_config() {
 
 get_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        log_debug "Config file doesn't exist, creating default"
         create_default_config
     fi
     
     # Check if file is empty or corrupted
     if [[ ! -s "$CONFIG_FILE" ]]; then
-        log_warn "Config file is empty, recreating"
         create_default_config
     fi
     
@@ -630,19 +628,14 @@ try:
     key_path = os.environ['KIOSK_KEY_PATH']
     default_value = os.environ['KIOSK_DEFAULT_VALUE']
     
-    print(f'DEBUG get_config_value: Looking for {key_path}, default={default_value}', file=sys.stderr)
-    
     data = json.load(sys.stdin)
-    print(f'DEBUG get_config_value: Loaded config data: {data}', file=sys.stderr)
     
     keys = key_path.split('.')
     value = data
     for key in keys:
         value = value[key]
-    print(f'DEBUG get_config_value: Found value: {value}', file=sys.stderr)
     print(value)
 except Exception as e:
-    print(f'DEBUG get_config_value: Exception {e}, using default: {default_value}', file=sys.stderr)
     print(default_value)
 "
     
@@ -654,14 +647,10 @@ set_config_value() {
     local key_path="$1"
     local new_value="$2"
     
-    backup_config
-    
     # Use environment variables to safely pass values to Python
     export KIOSK_CONFIG_FILE="$CONFIG_FILE"
     export KIOSK_KEY_PATH="$key_path"
     export KIOSK_NEW_VALUE="$new_value"
-    
-    log_debug "Setting config: $key_path = $new_value in $CONFIG_FILE"
     
     python3 -c "
 import json
@@ -673,14 +662,10 @@ try:
     key_path = os.environ['KIOSK_KEY_PATH']
     new_value = os.environ['KIOSK_NEW_VALUE']
     
-    print(f'DEBUG: Setting {key_path} = {new_value} in {config_file}', file=sys.stderr)
-    
     try:
         with open(config_file, 'r') as f:
             data = json.load(f)
-        print(f'DEBUG: Loaded existing config', file=sys.stderr)
     except Exception as e:
-        print(f'DEBUG: Creating new config (error: {e})', file=sys.stderr)
         data = {}
 
     keys = key_path.split('.')
@@ -700,8 +685,6 @@ try:
     else:
         current[keys[-1]] = new_value
 
-    print(f'DEBUG: Writing to {config_file}', file=sys.stderr)
-    
     # Write to temporary file first, then move to prevent corruption
     import tempfile
     import os
@@ -716,10 +699,12 @@ try:
     
     # Replace the original file
     os.replace(temp_file, config_file)
-    print(f'DEBUG: Successfully updated config', file=sys.stderr)
+    
+    print('SUCCESS')
     
 except Exception as e:
     print(f'ERROR: Failed to update config: {e}', file=sys.stderr)
+    print(f'DEBUG: Config file path was: {config_file}', file=sys.stderr)
     # Don't exit - that might be causing corruption, just report the error
     print('FAILED')
 " || {
@@ -774,22 +759,12 @@ try:
     with open(config_file, 'r') as f:
         data = json.load(f)
     
-    # Validate required sections
-    required_sections = ['kiosk', 'api', 'playlist']
-    for section in required_sections:
-        if section not in data:
-            exit(1)
+    # Validate required sections - be more lenient
+    if 'kiosk' not in data:
+        exit(1)
     
-    # Validate kiosk section
-    if 'url' not in data['kiosk'] or 'rotation' not in data['kiosk']:
-        exit(1)
-        
-    # Validate API section 
-    if 'api_key' not in data['api']:
-        exit(1)
-        
-    # Validate playlist section
-    if 'enabled' not in data['playlist'] or 'urls' not in data['playlist']:
+    # Validate kiosk section has at least url
+    if 'url' not in data['kiosk']:
         exit(1)
         
     exit(0)
@@ -3187,10 +3162,8 @@ print_setup_info() {
 # ==========================================
 
 get_url() {
-    log_debug "Getting URL from config file: $CONFIG_FILE"
     local result
     result=$(get_config_value "kiosk.url" "http://example.com")
-    log_debug "Retrieved URL: $result"
     echo "$result"
 }
 
@@ -3209,12 +3182,10 @@ set_url() {
         exit 1
     fi
     
-    # Backup current configuration
-    backup_config
-    
     # Set new URL and disable playlist mode
     set_config_value "kiosk.url" "$url"
     set_config_value "playlist.enabled" "false"
+    
     
     log_info "URL set to: $url"
     
