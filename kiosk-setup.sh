@@ -909,22 +909,66 @@ except Exception as e:
             if [[ -n "$tab_info" ]]; then
                 log_debug "Found tab ID: $tab_info, sending navigation command"
                 
-                # Method 1: Close current tab and open new one (most reliable)
-                log_debug "Trying tab replacement method"
+                # Method 1: Navigate using Chrome's Runtime.evaluate with proper syntax
+                log_debug "Trying Runtime.evaluate navigation"
                 
-                # Close the current tab
-                local close_result
-                close_result=$(curl -s "http://localhost:$DEBUG_PORT/json/close/$tab_info" 2>/dev/null)
-                log_debug "Tab close result: $close_result"
+                # Safely pass URL to Python to avoid quoting issues
+                export NAVIGATE_URL="$url"
+                local nav_result
+                nav_result=$(python3 -c "
+import json
+import urllib.request
+import urllib.parse
+import os
+
+url_to_navigate = os.environ['NAVIGATE_URL']
+tab_id = '$tab_info'
+debug_port = '$DEBUG_PORT'
+
+try:
+    # Use Runtime.evaluate to navigate
+    command = {
+        'id': 1,
+        'method': 'Runtime.evaluate',
+        'params': {
+            'expression': f'window.location.href = \'{url_to_navigate}\';'
+        }
+    }
+    
+    data = json.dumps(command).encode('utf-8')
+    req = urllib.request.Request(
+        f'http://localhost:{debug_port}/json/runtime/evaluate',
+        data=data,
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    with urllib.request.urlopen(req, timeout=5) as response:
+        result = json.loads(response.read().decode())
+        if 'result' in result or 'id' in result:
+            print('SUCCESS')
+        else:
+            print('FAILED')
+            
+except Exception as e:
+    # Fallback: try opening new tab with correct format
+    try:
+        encoded_url = urllib.parse.quote(url_to_navigate, safe=':/?#[]@!$&\'()*+,;=')
+        req = urllib.request.Request(f'http://localhost:{debug_port}/json/new?{encoded_url}')
+        
+        with urllib.request.urlopen(req, timeout=5) as response:
+            result = response.read().decode()
+            if result and 'id' in result:
+                print('SUCCESS')
+            else:
+                print('FAILED')
+    except:
+        print('FAILED')
+" 2>/dev/null)
+                unset NAVIGATE_URL
                 
-                sleep 1
+                log_debug "Navigation result: $nav_result"
                 
-                # Open new tab with the URL
-                local new_tab_result  
-                new_tab_result=$(curl -s "http://localhost:$DEBUG_PORT/json/new?$url" 2>/dev/null)
-                log_debug "New tab result: $new_tab_result"
-                
-                if [[ -n "$new_tab_result" ]]; then
+                if [[ "$nav_result" == "SUCCESS" ]]; then
                     log_info "Successfully navigated browser to: $url"
                     return 0
                 fi
