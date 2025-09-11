@@ -2854,16 +2854,20 @@ set_url() {
     
     log_info "URL set to: $url"
     
-    # Restart kiosk service with retry mechanism
-    log_info "Restarting kiosk service..."
-    if ! retry_command 3 5 "systemctl restart kiosk.service"; then
-        log_error "Failed to restart kiosk service after multiple attempts"
-        log_warn "Attempting to restore previous configuration..."
-        restore_config "kiosk_url.txt" || log_error "Failed to restore configuration"
-        exit 1
+    # Try to navigate without restarting (seamless)
+    log_info "Navigating browser to new URL..."
+    if navigate_browser_to_url "$url"; then
+        log_info "Successfully navigated to: $url"
+    else
+        log_warn "DevTools navigation failed, restarting kiosk service as fallback..."
+        if ! retry_command 3 5 "systemctl restart kiosk.service"; then
+            log_error "Failed to restart kiosk service after multiple attempts"
+            log_warn "Attempting to restore previous configuration..."
+            restore_config "kiosk_url.txt" || log_error "Failed to restore configuration"
+            exit 1
+        fi
+        log_info "Kiosk service restarted successfully"
     fi
-    
-    log_info "Kiosk service restarted successfully"
 }
 
 get_rotation() {
