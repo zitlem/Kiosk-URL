@@ -580,43 +580,62 @@ set_config_value() {
     export KIOSK_KEY_PATH="$key_path"
     export KIOSK_NEW_VALUE="$new_value"
     
+    log_debug "Setting config: $key_path = $new_value in $CONFIG_FILE"
+    
     python3 -c "
 import json
 import os
-
-config_file = os.environ['KIOSK_CONFIG_FILE']
-key_path = os.environ['KIOSK_KEY_PATH']
-new_value = os.environ['KIOSK_NEW_VALUE']
+import sys
 
 try:
-    with open(config_file, 'r') as f:
-        data = json.load(f)
-except:
-    data = {}
+    config_file = os.environ['KIOSK_CONFIG_FILE']
+    key_path = os.environ['KIOSK_KEY_PATH']
+    new_value = os.environ['KIOSK_NEW_VALUE']
+    
+    print(f'DEBUG: Setting {key_path} = {new_value} in {config_file}', file=sys.stderr)
+    
+    try:
+        with open(config_file, 'r') as f:
+            data = json.load(f)
+        print(f'DEBUG: Loaded existing config', file=sys.stderr)
+    except Exception as e:
+        print(f'DEBUG: Creating new config (error: {e})', file=sys.stderr)
+        data = {}
 
-keys = key_path.split('.')
-current = data
-for key in keys[:-1]:
-    if key not in current:
-        current[key] = {}
-    current = current[key]
+    keys = key_path.split('.')
+    current = data
+    for key in keys[:-1]:
+        if key not in current:
+            current[key] = {}
+        current = current[key]
 
-# Handle different value types
-if new_value.lower() == 'true':
-    current[keys[-1]] = True
-elif new_value.lower() == 'false': 
-    current[keys[-1]] = False
-elif new_value.isdigit():
-    current[keys[-1]] = int(new_value)
-else:
-    current[keys[-1]] = new_value
+    # Handle different value types
+    if new_value.lower() == 'true':
+        current[keys[-1]] = True
+    elif new_value.lower() == 'false': 
+        current[keys[-1]] = False
+    elif new_value.isdigit():
+        current[keys[-1]] = int(new_value)
+    else:
+        current[keys[-1]] = new_value
 
-with open(config_file, 'w') as f:
-    json.dump(data, f, indent=2)
-"
+    print(f'DEBUG: Writing to {config_file}', file=sys.stderr)
+    with open(config_file, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f'DEBUG: Successfully updated config', file=sys.stderr)
+    
+except Exception as e:
+    print(f'ERROR: Failed to update config: {e}', file=sys.stderr)
+    sys.exit(1)
+" || {
+        log_error "Failed to update configuration file"
+        return 1
+    }
     
     # Clean up environment variables
     unset KIOSK_CONFIG_FILE KIOSK_KEY_PATH KIOSK_NEW_VALUE
+    
+    log_debug "Configuration updated successfully"
 }
 
 get_browser_memory_kb() {
