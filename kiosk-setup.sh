@@ -951,12 +951,24 @@ navigate_browser_to_url() {
     if command -v curl >/dev/null; then
         log_debug "Attempting DevTools navigation to: $url"
         
-        # Test DevTools connectivity first
+        # Test DevTools connectivity with retries
         local devtools_test
-        devtools_test=$(curl -s --connect-timeout 2 "http://localhost:$DEBUG_PORT/json" 2>/dev/null)
+        local retry_count=0
+        local max_retries=5
+        
+        while [[ $retry_count -lt $max_retries ]]; do
+            devtools_test=$(curl -s --connect-timeout 2 "http://localhost:$DEBUG_PORT/json" 2>/dev/null)
+            if [[ -n "$devtools_test" ]]; then
+                log_debug "DevTools connected on attempt $((retry_count + 1))"
+                break
+            fi
+            ((retry_count++))
+            log_debug "DevTools attempt $retry_count/$max_retries failed, retrying..."
+            sleep 1
+        done
         
         if [[ -z "$devtools_test" ]]; then
-            log_warn "DevTools not accessible on port $DEBUG_PORT"
+            log_warn "DevTools not accessible on port $DEBUG_PORT after $max_retries attempts"
         else
             log_debug "DevTools accessible, getting tab info"
             
