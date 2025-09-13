@@ -566,7 +566,7 @@ get_config() {
             log_debug "Attempting to merge existing settings"
             
             # Use Python to safely merge any valid JSON from backup
-            export KIOSK_CONFIG_FILE="$CONFIG_FILE"
+            export KIOSK_CONFIG_FILE="${CONFIG_FILE:-/opt/kiosk/kiosk.json}"
             export KIOSK_BACKUP_CONTENT="$backup_content"
             python3 -c "
 import json
@@ -648,7 +648,7 @@ set_config_value() {
     local new_value="$2"
     
     # Use environment variables to safely pass values to Python
-    export KIOSK_CONFIG_FILE="$CONFIG_FILE"
+    export KIOSK_CONFIG_FILE="${CONFIG_FILE:-/opt/kiosk/kiosk.json}"
     export KIOSK_KEY_PATH="$key_path"
     export KIOSK_NEW_VALUE="$new_value"
     
