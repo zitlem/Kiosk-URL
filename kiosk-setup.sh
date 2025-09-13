@@ -3137,12 +3137,13 @@ print_setup_info() {
     echo "   examples, and automation scripts available in:"
     echo "   $INSTALL_DIR/USAGE_EXAMPLES.md"
     echo
+    local ip_addr=$(hostname -I | awk '{print $1}' 2>/dev/null || echo '<this-ip>')
     echo "API ENDPOINTS (after reboot):"
-    echo "   GET  http://<ip>/status?api_key=$api_key"
-    echo "   POST http://<ip>/set-url?api_key=$api_key"
-    echo "   POST http://<ip>/set-rotation?api_key=$api_key"
-    echo "   POST http://<ip>/restart?api_key=$api_key"
-    echo "   POST http://<ip>/reboot?api_key=$api_key"
+    echo "   GET  http://$ip_addr/status?api_key=$api_key"
+    echo "   POST http://$ip_addr/set-url?api_key=$api_key"
+    echo "   POST http://$ip_addr/set-rotation?api_key=$api_key"
+    echo "   POST http://$ip_addr/restart?api_key=$api_key"
+    echo "   POST http://$ip_addr/reboot?api_key=$api_key"
     echo
     echo "NEXT STEPS:"
     echo "   1. sudo reboot"
@@ -3621,7 +3622,7 @@ main() {
             echo "API will be available at: http://$(hostname -I | awk '{print $1}' 2>/dev/null || echo '<this-ip>')"
             
             local api_key
-            api_key=$(grep '"api_key"' "/opt/kiosk/api_config.json" 2>/dev/null | cut -d'"' -f4 || echo "check-after-reboot")
+            api_key=$(get_api_key 2>/dev/null || echo "check-after-reboot")
             echo "API Key: $api_key"
             echo "============================================"
             echo
