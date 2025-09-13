@@ -5,7 +5,7 @@
 # Supports both x86 and ARM architectures (including Raspberry Pi)
 #
 # Usage:
-#   Initial setup:    sudo ./kiosk-setup.sh setup
+#   Initial setup:    sudo $0 setup
 #   Management:       ./kiosk-setup.sh <command>  
 #   Help:            ./kiosk-setup.sh help
 
@@ -1389,7 +1389,7 @@ show_playlist() {
     if [[ -z "$urls_info" ]]; then
         echo "No URLs in playlist"
         echo
-        echo "Add URLs with: $0 playlist-add <URL> [display_time] [title]"
+        echo "Add URLs with: kiosk playlist-add <URL> [display_time] [title]"
     else
         echo "URLs in playlist:"
         echo
@@ -1420,10 +1420,10 @@ show_playlist() {
         done <<< "$urls_info"
         
         echo "Commands:"
-        echo "  $0 playlist-add <URL> [time] [title]  - Add URL"
-        echo "  $0 playlist-remove <index>           - Remove URL"
-        echo "  $0 playlist-enable                   - Enable rotation"
-        echo "  $0 playlist-disable                  - Disable rotation"
+        echo "  kiosk playlist-add <URL> [time] [title]  - Add URL"
+        echo "  kiosk playlist-remove <index>           - Remove URL"
+        echo "  kiosk playlist-enable                   - Enable rotation"
+        echo "  kiosk playlist-disable                  - Disable rotation"
     fi
     
     echo "========================================"
@@ -1773,7 +1773,7 @@ get_system_health_report() {
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log_error "This command must be run as root!"
-        log_error "Please run: sudo $0 $1"
+        log_error "Please run: sudo kiosk $1"
         exit 1
     fi
 }
@@ -3124,13 +3124,13 @@ print_setup_info() {
     echo "   API Key: $api_key"
     echo
     echo "QUICK START COMMANDS:"
-    echo "   $0 status                    # Check system status"
-    echo "   $0 set-url <URL>             # Set single URL"
-    echo "   $0 playlist-add <URL> [time] # Add to playlist"
-    echo "   $0 playlist-enable           # Enable playlist rotation"
-    echo "   $0 set-rotation <rotation>   # Rotate screen"
-    echo "   $0 get-api-key               # Show API key"
-    echo "   $0 restart                   # Restart services"
+    echo "   kiosk status                    # Check system status"
+    echo "   kiosk set-url <URL>             # Set single URL"
+    echo "   kiosk playlist-add <URL> [time] # Add to playlist"
+    echo "   kiosk playlist-enable           # Enable playlist rotation"
+    echo "   kiosk set-rotation <rotation>   # Rotate screen"
+    echo "   kiosk get-api-key               # Show API key"
+    echo "   kiosk restart                   # Restart services"
     echo
     echo "COMPREHENSIVE EXAMPLES:"
     echo "   All usage examples with API calls, programming"
@@ -3149,7 +3149,7 @@ print_setup_info() {
     echo "   2. System will auto-login as '$KIOSK_USER'"
     echo "   3. Kiosk will start automatically"
     echo "   4. View examples: cat $INSTALL_DIR/USAGE_EXAMPLES.md"
-    echo "   5. Manage with: $0 <command>"
+    echo "   5. Manage with: kiosk <command>"
     echo "========================================"
 }
 
@@ -3168,7 +3168,7 @@ set_url() {
     
     if [[ -z "$url" ]]; then
         log_error "URL is required"
-        echo "Usage: $0 set-url <URL>"
+        echo "Usage: kiosk set-url <URL>"
         exit 1
     fi
     
@@ -3210,7 +3210,7 @@ set_rotation() {
     
     if [[ -z "$rotation" ]]; then
         log_error "Rotation is required"
-        echo "Usage: $0 set-rotation <normal|left|right|inverted>"
+        echo "Usage: kiosk set-rotation <normal|left|right|inverted>"
         exit 1
     fi
     
@@ -3496,30 +3496,30 @@ show_help() {
     echo "  sudo $0 setup                 - Complete system setup"
     echo
     echo "MANAGEMENT:"
-    echo "  $0 status                     - Show system status"
-    echo "  $0 get-url                    - Get current URL"
-    echo "  $0 set-url <URL>              - Set URL and restart browser"
-    echo "  $0 get-rotation               - Get current screen rotation"
-    echo "  $0 set-rotation <rotation>    - Set screen rotation (normal|left|right|inverted)"
-    echo "  $0 get-api-key                - Show current API key"
-    echo "  $0 regenerate-api-key         - Generate new API key (requires root)"
+    echo "  kiosk status                     - Show system status"
+    echo "  kiosk get-url                    - Get current URL"
+    echo "  kiosk set-url <URL>              - Set URL and restart browser"
+    echo "  kiosk get-rotation               - Get current screen rotation"
+    echo "  kiosk set-rotation <rotation>    - Set screen rotation (normal|left|right|inverted)"
+    echo "  kiosk get-api-key                - Show current API key"
+    echo "  kiosk regenerate-api-key         - Generate new API key (requires root)"
     echo
     echo "SERVICE MANAGEMENT (requires root):"
-    echo "  sudo $0 start                 - Start kiosk services"
-    echo "  sudo $0 stop                  - Stop kiosk services"
-    echo "  sudo $0 restart               - Restart kiosk services"
-    echo "  $0 logs [service]             - Show logs (service: kiosk, api)"
+    echo "  sudo kiosk start                 - Start kiosk services"
+    echo "  sudo kiosk stop                  - Stop kiosk services"
+    echo "  sudo kiosk restart               - Restart kiosk services"
+    echo "  kiosk logs [service]             - Show logs (service: kiosk, api)"
     echo
     echo "UTILITIES:"
-    echo "  $0 test-api                   - Test API endpoints"
-    echo "  sudo $0 install               - Install script to system PATH"
-    echo "  sudo $0 uninstall             - Completely remove kiosk system"
-    echo "  $0 help                       - Show this help"
+    echo "  kiosk test-api                   - Test API endpoints"
+    echo "  sudo kiosk install               - Install script to system PATH"
+    echo "  sudo kiosk uninstall             - Completely remove kiosk system"
+    echo "  kiosk help                       - Show this help"
     echo
     echo "EXAMPLES:"
-    echo "  $0 set-url http://google.com"
-    echo "  $0 set-rotation left"
-    echo "  $0 logs kiosk"
+    echo "  kiosk set-url http://google.com"
+    echo "  kiosk set-rotation left"
+    echo "  kiosk logs kiosk"
     echo
     echo "API USAGE:"
     echo "  curl \"http://<ip>/status?api_key=<key>\""
@@ -3757,7 +3757,7 @@ main() {
         "playlist-add")
             if [[ -z "$2" ]]; then
                 log_error "URL is required"
-                echo "Usage: $0 playlist-add <URL> [display_time] [title]"
+                echo "Usage: kiosk playlist-add <URL> [display_time] [title]"
                 exit 1
             fi
             add_playlist_url "$2" "$3" "$4" "add"
@@ -3765,7 +3765,7 @@ main() {
         "playlist-replace")
             if [[ -z "$2" ]]; then
                 log_error "URL is required"
-                echo "Usage: $0 playlist-replace <URL> [display_time] [title]"
+                echo "Usage: kiosk playlist-replace <URL> [display_time] [title]"
                 exit 1
             fi
             add_playlist_url "$2" "$3" "$4" "replace"
@@ -3774,7 +3774,7 @@ main() {
             # Alias for playlist-replace for clarity
             if [[ -z "$2" ]]; then
                 log_error "URL is required"
-                echo "Usage: $0 playlist-set <URL> [display_time] [title]"
+                echo "Usage: kiosk playlist-set <URL> [display_time] [title]"
                 exit 1
             fi
             add_playlist_url "$2" "$3" "$4" "replace"
@@ -3782,7 +3782,7 @@ main() {
         "playlist-remove")
             if [[ -z "$2" ]]; then
                 log_error "URL index is required"
-                echo "Usage: $0 playlist-remove <index>"
+                echo "Usage: kiosk playlist-remove <index>"
                 exit 1
             fi
             remove_playlist_url "$2"
@@ -3850,13 +3850,13 @@ main() {
             ;;
         "")
             echo "Universal Kiosk Management System"
-            echo "Run '$0 help' for usage information"
+            echo "Run 'kiosk help' for usage information"
             echo "Run 'sudo $0 setup' for initial setup"
-            echo "Run '$0 status' for current system status"
+            echo "Run 'kiosk status' for current system status"
             ;;
         *)
             log_error "Unknown command: $1"
-            echo "Run '$0 help' for available commands"
+            echo "Run 'kiosk help' for available commands"
             exit 1
             ;;
     esac
