@@ -547,7 +547,8 @@ get_config() {
         create_default_config
     fi
     
-    if validate_config >/dev/null 2>&1; then
+    # Try to output the config first, validate only if that fails
+    if cat "$CONFIG_FILE" 2>/dev/null | python3 -c "import json, sys; json.load(sys.stdin)" >/dev/null 2>&1; then
         cat "$CONFIG_FILE"
     else
         log_warn "Invalid config detected, attempting to repair"
