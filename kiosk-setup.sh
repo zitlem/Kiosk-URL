@@ -2815,8 +2815,8 @@ class KioskHandler(BaseHTTPRequestHandler):
                 current_url = "http://example.com"
                 
             try:
-                with open(ROTATION_CONFIG_FILE, 'r') as f:
-                    current_rotation = f.read().strip()
+                config = load_config()
+                current_rotation = config.get("kiosk", {}).get("rotation", "normal")
             except:
                 current_rotation = "normal"
             
@@ -2871,17 +2871,13 @@ class KioskHandler(BaseHTTPRequestHandler):
             if single_url and not urls:
                 # Single URL mode - display indefinitely
                 try:
+                    # Update the main config with single URL and playlist disabled
+                    config = load_config()
+                    config["kiosk"]["url"] = single_url
+                    config["playlist"]["enabled"] = False
+                    config["playlist"]["urls"] = [{"url": single_url, "display_time": 999999, "title": "Single URL"}]
                     with open(CONFIG_FILE, 'w') as f:
-                        f.write(single_url)
-                    
-                    # Disable playlist mode
-                    playlist_config = {
-                        "enabled": False,
-                        "default_display_time": 30,
-                        "urls": [{"url": single_url, "display_time": 999999, "title": "Single URL"}]
-                    }
-                    with open(PLAYLIST_CONFIG_FILE, 'w') as f:
-                        json.dump(playlist_config, f, indent=2)
+                        json.dump(config, f, indent=2)
                     
                     self.send_response(200)
                     self.send_header('Content-type', 'application/json')
@@ -2921,19 +2917,15 @@ class KioskHandler(BaseHTTPRequestHandler):
                                 })
                     
                     if processed_urls:
-                        # Create playlist configuration
-                        playlist_config = {
-                            "enabled": len(processed_urls) > 1,  # Enable playlist if multiple URLs
-                            "default_display_time": 30,
-                            "urls": processed_urls
-                        }
+                        # Update main config with playlist
+                        config = load_config()
+                        config["kiosk"]["url"] = processed_urls[0]['url']  # Set first URL as fallback
+                        config["playlist"]["enabled"] = len(processed_urls) > 1
+                        config["playlist"]["default_display_time"] = 30
+                        config["playlist"]["urls"] = processed_urls
                         
-                        with open(PLAYLIST_CONFIG_FILE, 'w') as f:
-                            json.dump(playlist_config, f, indent=2)
-                        
-                        # Also update single URL config with first URL for fallback
                         with open(CONFIG_FILE, 'w') as f:
-                            f.write(processed_urls[0]['url'])
+                            json.dump(config, f, indent=2)
                         
                         self.send_response(200)
                         self.send_header('Content-type', 'application/json')
@@ -2971,8 +2963,10 @@ class KioskHandler(BaseHTTPRequestHandler):
             
             if rotation in valid_rotations:
                 try:
-                    with open(ROTATION_CONFIG_FILE, 'w') as f:
-                        f.write(rotation)
+                    config = load_config()
+                    config["kiosk"]["rotation"] = rotation
+                    with open(CONFIG_FILE, 'w') as f:
+                        json.dump(config, f, indent=2)
                     
                     # Apply rotation immediately
                     os.system(f'DISPLAY=:0 xrandr --output $(DISPLAY=:0 xrandr | grep " connected" | head -1 | cut -d" " -f1) --rotate {rotation} 2>/dev/null || true')
