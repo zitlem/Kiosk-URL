@@ -799,7 +799,7 @@ get_playlist_urls() {
     python3 -c "
 import json
 try:
-    data = json.loads('$config')
+    data = json.loads('''$config''')
     for i, item in enumerate(data.get('urls', [])):
         url = item.get('url', '')
         time = item.get('display_time', data.get('default_display_time', $DEFAULT_DISPLAY_TIME))
@@ -1304,7 +1304,7 @@ remove_playlist_url() {
 import json
 import sys
 
-config = json.loads('$config')
+config = json.loads('''$config''')
 urls = config.get('urls', [])
 
 if $index < len(urls):
@@ -1332,7 +1332,7 @@ enable_playlist() {
     python3 -c "
 import json
 
-config = json.loads('$config')
+config = json.loads('''$config''')
 config['enabled'] = True
 
 with open('$PLAYLIST_CONFIG_FILE', 'w') as f:
@@ -1354,7 +1354,7 @@ disable_playlist() {
     python3 -c "
 import json
 
-config = json.loads('$config')
+config = json.loads('''$config''')
 config['enabled'] = False
 
 with open('$PLAYLIST_CONFIG_FILE', 'w') as f:
