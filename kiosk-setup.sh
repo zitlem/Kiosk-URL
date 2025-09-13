@@ -951,24 +951,12 @@ navigate_browser_to_url() {
     if command -v curl >/dev/null; then
         log_debug "Attempting DevTools navigation to: $url"
         
-        # Test DevTools connectivity with retries
+        # Test DevTools connectivity first
         local devtools_test
-        local retry_count=0
-        local max_retries=5
-        
-        while [[ $retry_count -lt $max_retries ]]; do
-            devtools_test=$(curl -s --connect-timeout 2 "http://localhost:$DEBUG_PORT/json" 2>/dev/null)
-            if [[ -n "$devtools_test" ]]; then
-                log_debug "DevTools connected on attempt $((retry_count + 1))"
-                break
-            fi
-            ((retry_count++))
-            log_debug "DevTools attempt $retry_count/$max_retries failed, retrying..."
-            sleep 1
-        done
+        devtools_test=$(curl -s --connect-timeout 2 "http://localhost:$DEBUG_PORT/json" 2>/dev/null)
         
         if [[ -z "$devtools_test" ]]; then
-            log_warn "DevTools not accessible on port $DEBUG_PORT after $max_retries attempts"
+            log_warn "DevTools not accessible on port $DEBUG_PORT"
         else
             log_debug "DevTools accessible, getting tab info"
             
@@ -2898,20 +2886,8 @@ class KioskHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(json.dumps({"status": "success", "url": single_url, "mode": "single"}).encode())
                     
-                    # Try DevTools navigation first, fallback to restart (like CLI)
-                    def navigate_via_devtools():
-                        import subprocess
-                        try:
-                            # Use same navigation approach as CLI
-                            cmd = f'source /opt/kiosk/kiosk-setup.sh && navigate_browser_to_url "{single_url}"'
-                            result = subprocess.run(['bash', '-c', cmd], capture_output=True, text=True, timeout=30)
-                            if result.returncode != 0:
-                                # DevTools failed, restart as fallback
-                                os.system("systemctl restart kiosk.service")
-                        except:
-                            # Any error, restart as fallback
-                            os.system("systemctl restart kiosk.service")
-                    threading.Thread(target=navigate_via_devtools, daemon=True).start()
+                    # Restart browser
+                    threading.Thread(target=lambda: os.system("systemctl restart kiosk.service"), daemon=True).start()
                 except:
                     self.send_response(500)
                     self.end_headers()
