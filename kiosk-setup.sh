@@ -746,11 +746,12 @@ get_browser_memory_kb() {
 }
 
 validate_config() {
-    if [[ ! -f "$CONFIG_FILE" ]]; then
+    local config_file="${CONFIG_FILE:-/opt/kiosk/kiosk.json}"
+    if [[ ! -f "$config_file" ]]; then
         return 1
     fi
     
-    export KIOSK_CONFIG_FILE="$CONFIG_FILE"
+    export KIOSK_CONFIG_FILE="$config_file"
     python3 -c "
 import json
 import os
