@@ -2888,17 +2888,37 @@ class KioskHandler(BaseHTTPRequestHandler):
                     
                     # Try DevTools navigation first, fallback to restart (like CLI)
                     def navigate_via_devtools():
-                        import subprocess
+                        import urllib.request
+                        import urllib.parse
+                        import json as json_module
                         try:
-                            # Use same navigation approach as CLI
-                            cmd = f'source /opt/kiosk/kiosk-setup.sh && navigate_browser_to_url "{single_url}"'
-                            result = subprocess.run(['bash', '-c', cmd], capture_output=True, text=True, timeout=30)
-                            if result.returncode != 0:
-                                # DevTools failed, restart as fallback
-                                os.system("systemctl restart kiosk.service")
+                            # Try DevTools navigation directly (same approach as bash function)
+                            devtools_url = "http://localhost:9222/json"
+                            response = urllib.request.urlopen(devtools_url, timeout=5)
+                            tabs = json_module.loads(response.read().decode())
+
+                            if tabs:
+                                # Get the first tab
+                                tab_id = tabs[0]['id']
+                                navigate_url = f"http://localhost:9222/json/runtime/evaluate"
+
+                                # Navigate using Runtime.evaluate
+                                eval_data = {
+                                    "expression": f"window.location.href='{single_url}'"
+                                }
+
+                                data = urllib.parse.urlencode(eval_data).encode()
+                                req = urllib.request.Request(navigate_url, data=data)
+                                urllib.request.urlopen(req, timeout=5)
+
+                                # Success - no need to restart
+                                return
                         except:
-                            # Any error, restart as fallback
-                            os.system("systemctl restart kiosk.service")
+                            pass
+
+                        # DevTools navigation failed, restart as fallback
+                        os.system("systemctl restart kiosk.service")
+
                     threading.Thread(target=navigate_via_devtools, daemon=True).start()
                 except:
                     self.send_response(500)
