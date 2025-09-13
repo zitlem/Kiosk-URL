@@ -785,7 +785,15 @@ create_default_playlist() {
 }
 
 get_playlist_config() {
-    get_config_value "playlist"
+    get_config | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    playlist = data.get('playlist', {})
+    print(json.dumps(playlist))
+except:
+    print('{}')
+"
 }
 
 is_playlist_enabled() {
