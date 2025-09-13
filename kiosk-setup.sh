@@ -2893,14 +2893,17 @@ class KioskHandler(BaseHTTPRequestHandler):
                         import json as json_module
                         try:
                             # Try DevTools navigation directly (same approach as bash function)
+                            print(f"[API DEBUG] Attempting DevTools navigation to: {single_url}")
                             devtools_url = "http://localhost:9222/json"
                             response = urllib.request.urlopen(devtools_url, timeout=5)
                             tabs = json_module.loads(response.read().decode())
+                            print(f"[API DEBUG] Found {len(tabs)} tabs")
 
                             if tabs:
                                 # Get the first tab
                                 tab_id = tabs[0]['id']
                                 navigate_url = f"http://localhost:9222/json/runtime/evaluate"
+                                print(f"[API DEBUG] Using tab: {tab_id}")
 
                                 # Navigate using Runtime.evaluate
                                 eval_data = {
@@ -2911,9 +2914,11 @@ class KioskHandler(BaseHTTPRequestHandler):
                                 req = urllib.request.Request(navigate_url, data=data)
                                 urllib.request.urlopen(req, timeout=5)
 
+                                print(f"[API DEBUG] DevTools navigation SUCCESS")
                                 # Success - no need to restart
                                 return
-                        except:
+                        except Exception as e:
+                            print(f"[API DEBUG] DevTools navigation FAILED: {e}")
                             pass
 
                         # DevTools navigation failed, restart as fallback
