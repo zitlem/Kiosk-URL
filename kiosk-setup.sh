@@ -101,13 +101,13 @@ CURRENT_URL_INDEX=0         # Current position in playlist
 
 log_info() {
     local msg="$1"
-    echo -e "${GREEN}[INFO]${NC} $msg"
+    echo -e "${GREEN}[INFO]${NC} $msg" >&2
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $msg" >> "$ERROR_LOG" 2>/dev/null || true
 }
 
 log_warn() {
     local msg="$1"
-    echo -e "${YELLOW}[WARN]${NC} $msg"
+    echo -e "${YELLOW}[WARN]${NC} $msg" >&2
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $msg" >> "$ERROR_LOG" 2>/dev/null || true
 }
 
@@ -119,7 +119,7 @@ log_error() {
 
 log_debug() {
     local msg="$1"
-    echo -e "${BLUE}[DEBUG]${NC} $msg"
+    echo -e "${BLUE}[DEBUG]${NC} $msg" >&2
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [DEBUG] $msg" >> "$ERROR_LOG" 2>/dev/null || true
 }
 
