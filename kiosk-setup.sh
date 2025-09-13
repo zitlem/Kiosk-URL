@@ -945,117 +945,54 @@ navigate_browser_to_url() {
     validate_url "$url" || {
         log_error "Invalid URL for navigation: $url"
         return 1
-    fi
+    }
     
-    log_debug "Attempting DevTools navigation to: $url"
-    
-    # Test DevTools connectivity with retries
-    local devtools_test
-    local retry_count=0
-    local max_retries=5
-    
-    while [[ $retry_count -lt $max_retries ]]; do
-        devtools_test=$(curl -s --connect-timeout 2 "http://localhost:$DEBUG_PORT/json" 2>/dev/null)
-        if [[ -n "$devtools_test" ]]; then
-            log_debug "DevTools connected on attempt $((retry_count + 1))"
-            break
-        fi
-        ((retry_count++))
-        log_debug "DevTools attempt $retry_count/$max_retries failed, retrying..."
-        sleep 1
-    done
-    
-    if [[ -z "$devtools_test" ]]; then
-        log_warn "DevTools not accessible on port $DEBUG_PORT after $max_retries attempts"
-        return 1
-    fi
-    
-    # Get the first tab ID
-    local tab_id
-    tab_id=$(echo "$devtools_test" | python3 -c "
+    # Use Chrome DevTools Protocol to navigate
+    if command -v curl >/dev/null; then
+        log_debug "Attempting DevTools navigation to: $url"
+        
+        # Test DevTools connectivity with retries
+        local devtools_test
+        local retry_count=0
+        local max_retries=5
+        
+        while [[ $retry_count -lt $max_retries ]]; do
+            devtools_test=$(curl -s --connect-timeout 2 "http://localhost:$DEBUG_PORT/json" 2>/dev/null)
+            if [[ -n "$devtools_test" ]]; then
+                log_debug "DevTools connected on attempt $((retry_count + 1))"
+                break
+            fi
+            ((retry_count++))
+            log_debug "DevTools attempt $retry_count/$max_retries failed, retrying..."
+            sleep 1
+        done
+        
+        if [[ -z "$devtools_test" ]]; then
+            log_warn "DevTools not accessible on port $DEBUG_PORT after $max_retries attempts"
+        else
+            log_debug "DevTools accessible, getting tab info"
+            
+            local tab_info
+            tab_info=$(echo "$devtools_test" | python3 -c "
 import json, sys
 try:
     tabs = json.load(sys.stdin)
-    if tabs and len(tabs) > 0:
+    if tabs:
         print(tabs[0]['id'])
-    else:
-        print('ERROR: No tabs found')
 except Exception as e:
-    print(f'ERROR: {e}')
+    print('ERROR: ' + str(e), file=sys.stderr)
 " 2>/dev/null)
-    
-    if [[ "$tab_id" == "ERROR:"* ]] || [[ -z "$tab_id" ]]; then
-        log_warn "Could not get tab ID from DevTools"
-        return 1
-    fi
-    
-    log_debug "Found tab ID: $tab_id"
-    
-    # Try simple navigation using Runtime.evaluate
-    local nav_result
-    nav_result=$(python3 -c "
-import json
-import urllib.request
-
-url = '$url'
-tab_id = '$tab_id'
-debug_port = $DEBUG_PORT
-
-try:
-    # Simple JavaScript navigation command
-    js_code = f'window.location.href = \"{url}\";'
-    
-    # Send Runtime.evaluate command via POST
-    payload = {
-        'id': 1,
-        'method': 'Runtime.evaluate',
-        'params': {
-            'expression': js_code
-        }
-    }
-    
-    devtools_url = f'http://localhost:{debug_port}/json/runtime/evaluate'
-    req = urllib.request.Request(
-        devtools_url,
-        data=json.dumps(payload).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}
-    )
-    
-    with urllib.request.urlopen(req, timeout=10) as response:
-        result = response.read().decode()
-        print('SUCCESS')
-        
-except Exception as e:
-    print(f'ERROR: {e}')
-" 2>/dev/null)
-    
-    if [[ "$nav_result" == "SUCCESS" ]]; then
-        log_info "DevTools navigation successful"
-        return 0
-    else
-        log_warn "DevTools navigation failed: $nav_result"
-        return 1
-    fi
-}
-
-
-try:
-    # Send the command
-    devtools_url = f'http://localhost:{debug_port}/json/runtime/evaluate'
-    req = urllib.request.Request(
-        devtools_url, 
-        data=json.dumps(payload).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}
-    )
-    
-    with urllib.request.urlopen(req, timeout=5) as response:
-        result = response.read().decode()
-        print('SUCCESS')
-except Exception as e:
-    print(f'ERROR: {e}')
-" 2>/dev/null)
+            
+            if [[ -n "$tab_info" ]]; then
+                log_debug "Found tab ID: $tab_info, sending navigation command"
                 
-                if [[ "$nav_payload" == "SUCCESS" ]]; then
+                # Method 1: Navigate using Chrome's Runtime.evaluate with proper syntax
+                log_debug "Trying Runtime.evaluate navigation [NEW VERSION 2.0]"
+                
+                # Safely pass URL to Python to avoid quoting issues
+                export NAVIGATE_URL="$url"
+                local nav_result
+                nav_result=$(python3 -c "
 import json
 import urllib.request
 import urllib.parse
@@ -2961,16 +2898,8 @@ class KioskHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(json.dumps({"status": "success", "url": single_url, "mode": "single"}).encode())
                     
-                    # Try seamless DevTools navigation first, fallback to restart
-                    def navigate_seamlessly():
-                        import subprocess
-                        # Use same navigation logic as CLI
-                        result = subprocess.run(["/bin/bash", "-c", f"navigate_browser_to_url '{single_url}'"],
-                                              capture_output=True, text=True)
-                        if result.returncode != 0:
-                            # DevTools navigation failed, restart as fallback
-                            os.system("systemctl restart kiosk.service")
-                    threading.Thread(target=navigate_seamlessly, daemon=True).start()
+                    # Restart browser
+                    threading.Thread(target=lambda: os.system("systemctl restart kiosk.service"), daemon=True).start()
                 except:
                     self.send_response(500)
                     self.end_headers()
@@ -3024,12 +2953,8 @@ class KioskHandler(BaseHTTPRequestHandler):
                         }
                         self.wfile.write(json.dumps(response).encode())
                         
-                        # Try seamless DevTools navigation first, fallback to restart
-                        def navigate_seamlessly():
-                            import subprocess
-                            # For playlist mode, restart is more appropriate to ensure proper rotation
-                            os.system("systemctl restart kiosk.service")
-                        threading.Thread(target=navigate_seamlessly, daemon=True).start()
+                        # Restart browser
+                        threading.Thread(target=lambda: os.system("systemctl restart kiosk.service"), daemon=True).start()
                     else:
                         self.send_response(400)
                         self.send_header('Content-type', 'application/json')
@@ -3776,15 +3701,6 @@ main() {
             ;;
         "regenerate-api-key")
             regenerate_api_key
-            ;;
-        "test-devtools")
-            echo "Testing DevTools connectivity on port $DEBUG_PORT..."
-            if curl -s --connect-timeout 5 "http://localhost:$DEBUG_PORT/json" | python3 -c "import json,sys; tabs=json.load(sys.stdin); print(f'Found {len(tabs)} tabs'); [print(f'Tab {i}: {t.get(\"title\",\"No title\")} - {t.get(\"url\",\"No URL\")}') for i,t in enumerate(tabs)]" 2>/dev/null; then
-                echo "DevTools is accessible and working"
-            else
-                echo "DevTools is not accessible on port $DEBUG_PORT"
-                echo "Check if Chrome is running with --remote-debugging-port=$DEBUG_PORT"
-            fi
             ;;
         "start")
             start_services
