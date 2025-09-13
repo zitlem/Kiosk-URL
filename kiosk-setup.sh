@@ -442,7 +442,7 @@ validate_playlist_config() {
 import json
 with open('$config_file', 'r') as f:
     data = json.load(f)
-    for item in data.get('urls', []):
+    for item in data.get('playlist', {}).get('urls', []):
         print(item.get('url', ''))
 " 2>/dev/null)
     
@@ -1312,15 +1312,24 @@ remove_playlist_url() {
 import json
 import sys
 
-config = json.loads('''$config''')
-urls = config.get('urls', [])
+# Load the full config file
+with open('$CONFIG_FILE', 'r') as f:
+    full_config = json.load(f)
+
+# Update just the playlist section
+playlist_config = json.loads('''$config''')
+urls = playlist_config.get('urls', [])
 
 if $index < len(urls):
     removed = urls.pop($index)
     print(f\"Removed: {removed.get('title', 'Unknown')} - {removed.get('url', '')}\")
-    
-    with open('$PLAYLIST_CONFIG_FILE', 'w') as f:
-        json.dump(config, f, indent=2)
+
+    # Update the playlist in full config and write back
+    playlist_config['urls'] = urls
+    full_config['playlist'] = playlist_config
+
+    with open('$CONFIG_FILE', 'w') as f:
+        json.dump(full_config, f, indent=2)
     sys.exit(0)
 else:
     print(f\"Index $index out of range (0-{len(urls)-1})\")
@@ -1340,11 +1349,18 @@ enable_playlist() {
     python3 -c "
 import json
 
-config = json.loads('''$config''')
-config['enabled'] = True
+# Load the full config file
+with open('$CONFIG_FILE', 'r') as f:
+    full_config = json.load(f)
 
-with open('$PLAYLIST_CONFIG_FILE', 'w') as f:
-    json.dump(config, f, indent=2)
+# Update just the playlist.enabled setting
+playlist_config = json.loads('''$config''')
+playlist_config['enabled'] = True
+full_config['playlist'] = playlist_config
+
+# Write back the complete config
+with open('$CONFIG_FILE', 'w') as f:
+    json.dump(full_config, f, indent=2)
 " || {
         log_error "Failed to enable playlist"
         return 1
@@ -1362,11 +1378,18 @@ disable_playlist() {
     python3 -c "
 import json
 
-config = json.loads('''$config''')
-config['enabled'] = False
+# Load the full config file
+with open('$CONFIG_FILE', 'r') as f:
+    full_config = json.load(f)
 
-with open('$PLAYLIST_CONFIG_FILE', 'w') as f:
-    json.dump(config, f, indent=2)
+# Update just the playlist.enabled setting
+playlist_config = json.loads('''$config''')
+playlist_config['enabled'] = False
+full_config['playlist'] = playlist_config
+
+# Write back the complete config
+with open('$CONFIG_FILE', 'w') as f:
+    json.dump(full_config, f, indent=2)
 " || {
         log_error "Failed to disable playlist"
         return 1
@@ -1443,7 +1466,7 @@ backup_config() {
     
     mkdir -p "$backup_dir" 2>/dev/null || return 1
     
-    for config in "$CONFIG_FILE" "$API_CONFIG_FILE" "$ROTATION_CONFIG_FILE" "$PLAYLIST_CONFIG_FILE"; do
+    for config in "$CONFIG_FILE"; do
         if [[ -f "$config" ]]; then
             local filename=$(basename "$config")
             cp "$config" "$backup_dir/${filename}.${timestamp}" 2>/dev/null || {
@@ -1484,13 +1507,13 @@ restore_config() {
             target_file="$CONFIG_FILE"
             ;;
         "api_config.json")
-            target_file="$API_CONFIG_FILE"
+            target_file="$CONFIG_FILE"
             ;;
         "rotation_config.txt")
-            target_file="$ROTATION_CONFIG_FILE"
+            target_file="$CONFIG_FILE"
             ;;
         "playlist_config.json")
-            target_file="$PLAYLIST_CONFIG_FILE"
+            target_file="$CONFIG_FILE"
             ;;
         *)
             log_error "Unknown config name: $config_name"
@@ -1673,11 +1696,9 @@ check_system_health() {
     fi
     
     # Check configuration files
-    for config_file in "$CONFIG_FILE" "$API_CONFIG_FILE" "$ROTATION_CONFIG_FILE"; do
-        if [[ ! -f "$config_file" ]]; then
-            issues+=("Missing config file: $(basename "$config_file")")
-        fi
-    done
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        issues+=("Missing config file: $(basename "$CONFIG_FILE")")
+    fi
     
     return ${#issues[@]}
 }
@@ -2705,9 +2726,9 @@ except:
     pass
 
 try:
-    with open('$PLAYLIST_CONFIG_FILE', 'r') as f:
+    with open('$CONFIG_FILE', 'r') as f:
         data = json.load(f)
-    total_urls = len(data.get('urls', []))
+    total_urls = len(data.get('playlist', {}).get('urls', []))
     
     if total_urls > 1:
         # Advance index
@@ -2820,7 +2841,8 @@ class KioskHandler(BaseHTTPRequestHandler):
             
             try:
                 with open(CONFIG_FILE, 'r') as f:
-                    current_url = f.read().strip()
+                    config_data = json.load(f)
+                current_url = config_data.get("kiosk", {}).get("url", "http://example.com")
             except:
                 current_url = "http://example.com"
                 
@@ -3165,7 +3187,7 @@ set_permissions() {
     chown -R root:root "$INSTALL_DIR"
     chmod 755 "$INSTALL_DIR"
     chmod +x "$INSTALL_DIR"/*.sh 2>/dev/null || true
-    chmod 644 "$CONFIG_FILE" "$API_CONFIG_FILE" "$ROTATION_CONFIG_FILE" 2>/dev/null || true
+    chmod 644 "$CONFIG_FILE" 2>/dev/null || true
     
     log_info "Permissions configured"
 }
@@ -3809,15 +3831,9 @@ main() {
                 ((errors++))
             fi
             
-            if ! validate_config_file "$ROTATION_CONFIG_FILE" "rotation"; then
-                ((errors++))
-            fi
+            # All configs are now in the unified CONFIG_FILE, no separate validation needed
             
-            if ! validate_config_file "$API_CONFIG_FILE" "api"; then
-                ((errors++))
-            fi
-            
-            if ! validate_config_file "$PLAYLIST_CONFIG_FILE" "playlist"; then
+            if ! validate_config_file "$CONFIG_FILE" "playlist"; then
                 ((errors++))
             fi
             
