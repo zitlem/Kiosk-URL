@@ -2978,8 +2978,40 @@ class KioskHandler(BaseHTTPRequestHandler):
                         }
                         self.wfile.write(json.dumps(response).encode())
                         
-                        # Restart browser
-                        threading.Thread(target=lambda: os.system("systemctl restart kiosk.service"), daemon=True).start()
+                        # Try DevTools navigation first, fallback to restart for playlist setup
+                        def navigate_via_devtools_playlist():
+                            import urllib.request
+                            import urllib.parse
+                            try:
+                                print(f"[API DEBUG] Attempting DevTools navigation for playlist (first URL): {processed_urls[0]['url']}")
+                                devtools_url = "http://localhost:9222/json"
+                                response = urllib.request.urlopen(devtools_url, timeout=5)
+                                tabs = json.loads(response.read().decode())
+                                print(f"[API DEBUG] Found {len(tabs)} tabs")
+
+                                if tabs:
+                                    tab_id = tabs[0]['id']
+                                    navigate_url = f"http://localhost:9222/json/runtime/evaluate"
+                                    print(f"[API DEBUG] Using tab: {tab_id}")
+
+                                    eval_data = {
+                                        "expression": f"window.location.href='{processed_urls[0]['url']}'"
+                                    }
+
+                                    data = urllib.parse.urlencode(eval_data).encode()
+                                    req = urllib.request.Request(navigate_url, data=data)
+                                    urllib.request.urlopen(req, timeout=5)
+
+                                    print(f"[API DEBUG] DevTools navigation SUCCESS for playlist")
+                                    return
+                            except Exception as e:
+                                print(f"[API DEBUG] DevTools navigation FAILED for playlist: {e}")
+
+                            # DevTools navigation failed, restart as fallback for playlist setup
+                            print("[API DEBUG] Falling back to service restart for playlist")
+                            os.system("systemctl restart kiosk.service")
+
+                        threading.Thread(target=navigate_via_devtools_playlist, daemon=True).start()
                     else:
                         self.send_response(400)
                         self.send_header('Content-type', 'application/json')
