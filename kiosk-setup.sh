@@ -2922,31 +2922,28 @@ class KioskHandler(BaseHTTPRequestHandler):
                         import urllib.parse
                         import json as json_module
                         try:
-                            # Try DevTools navigation directly (same approach as bash function)
+                            # Try DevTools navigation using new tab approach (like bash script)
                             print(f"[API DEBUG] Attempting DevTools navigation to: {single_url}")
-                            devtools_url = "http://localhost:9222/json"
-                            response = urllib.request.urlopen(devtools_url, timeout=5)
-                            tabs = json_module.loads(response.read().decode())
-                            print(f"[API DEBUG] Found {len(tabs)} tabs")
 
-                            if tabs:
-                                # Get the first tab
-                                tab_id = tabs[0]['id']
-                                navigate_url = f"http://localhost:9222/json/runtime/evaluate"
-                                print(f"[API DEBUG] Using tab: {tab_id}")
+                            # Create new tab with the URL using PUT method
+                            new_tab_url = f"http://localhost:9222/json/new?{urllib.parse.quote(single_url)}"
+                            req = urllib.request.Request(new_tab_url, method='PUT')
+                            response = urllib.request.urlopen(req, timeout=5)
+                            new_tab_data = json_module.loads(response.read().decode())
+                            print(f"[API DEBUG] Created new tab: {new_tab_data.get('id', 'unknown')}")
 
-                                # Navigate using Runtime.evaluate
-                                eval_data = {
-                                    "expression": f"window.location.href='{single_url}'"
-                                }
+                            # Close old tabs to clean up
+                            try:
+                                tabs_response = urllib.request.urlopen("http://localhost:9222/json", timeout=5)
+                                tabs = json_module.loads(tabs_response.read().decode())
+                                for tab in tabs[:-1]:  # Keep only the newest tab
+                                    close_url = f"http://localhost:9222/json/close/{tab['id']}"
+                                    urllib.request.urlopen(close_url, timeout=2)
+                            except:
+                                pass
 
-                                data = urllib.parse.urlencode(eval_data).encode()
-                                req = urllib.request.Request(navigate_url, data=data)
-                                urllib.request.urlopen(req, timeout=5)
-
-                                print(f"[API DEBUG] DevTools navigation SUCCESS")
-                                # Success - no need to restart
-                                return
+                            print(f"[API DEBUG] DevTools navigation SUCCESS")
+                            return
                         except Exception as e:
                             print(f"[API DEBUG] DevTools navigation FAILED: {e}")
                             pass
@@ -3014,26 +3011,26 @@ class KioskHandler(BaseHTTPRequestHandler):
                             import urllib.parse
                             try:
                                 print(f"[API DEBUG] Attempting DevTools navigation for playlist (first URL): {processed_urls[0]['url']}")
-                                devtools_url = "http://localhost:9222/json"
-                                response = urllib.request.urlopen(devtools_url, timeout=5)
-                                tabs = json.loads(response.read().decode())
-                                print(f"[API DEBUG] Found {len(tabs)} tabs")
 
-                                if tabs:
-                                    tab_id = tabs[0]['id']
-                                    navigate_url = f"http://localhost:9222/json/runtime/evaluate"
-                                    print(f"[API DEBUG] Using tab: {tab_id}")
+                                # Create new tab with the first URL from playlist using PUT method
+                                new_tab_url = f"http://localhost:9222/json/new?{urllib.parse.quote(processed_urls[0]['url'])}"
+                                req = urllib.request.Request(new_tab_url, method='PUT')
+                                response = urllib.request.urlopen(req, timeout=5)
+                                new_tab_data = json.loads(response.read().decode())
+                                print(f"[API DEBUG] Created new tab for playlist: {new_tab_data.get('id', 'unknown')}")
 
-                                    eval_data = {
-                                        "expression": f"window.location.href='{processed_urls[0]['url']}'"
-                                    }
+                                # Close old tabs
+                                try:
+                                    tabs_response = urllib.request.urlopen("http://localhost:9222/json", timeout=5)
+                                    tabs = json.loads(tabs_response.read().decode())
+                                    for tab in tabs[:-1]:
+                                        close_url = f"http://localhost:9222/json/close/{tab['id']}"
+                                        urllib.request.urlopen(close_url, timeout=2)
+                                except:
+                                    pass
 
-                                    data = urllib.parse.urlencode(eval_data).encode()
-                                    req = urllib.request.Request(navigate_url, data=data)
-                                    urllib.request.urlopen(req, timeout=5)
-
-                                    print(f"[API DEBUG] DevTools navigation SUCCESS for playlist")
-                                    return
+                                print(f"[API DEBUG] DevTools navigation SUCCESS for playlist")
+                                return
                             except Exception as e:
                                 print(f"[API DEBUG] DevTools navigation FAILED for playlist: {e}")
 
@@ -3883,13 +3880,21 @@ main() {
             ;;
         "playlist-enable")
             enable_playlist
-            log_info "Restarting kiosk service to enable playlist..."
-            systemctl restart kiosk.service 2>/dev/null || log_warn "Could not restart service automatically"
+            log_info "Navigating to first playlist URL..."
+            # Try DevTools navigation to first URL in playlist
+            navigate_browser_to_url "$(get_current_playlist_url)" || {
+                log_warn "DevTools navigation failed, restarting service as fallback"
+                systemctl restart kiosk.service 2>/dev/null || log_warn "Could not restart service automatically"
+            }
             ;;
         "playlist-disable")
             disable_playlist
-            log_info "Restarting kiosk service to disable playlist..."
-            systemctl restart kiosk.service 2>/dev/null || log_warn "Could not restart service automatically"
+            log_info "Navigating to single URL..."
+            # Try DevTools navigation to single URL
+            navigate_browser_to_url "$(get_url)" || {
+                log_warn "DevTools navigation failed, restarting service as fallback"
+                systemctl restart kiosk.service 2>/dev/null || log_warn "Could not restart service automatically"
+            }
             ;;
         "playlist-clear")
             check_root "playlist-clear"
