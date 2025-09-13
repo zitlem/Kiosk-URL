@@ -2961,8 +2961,20 @@ class KioskHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(json.dumps({"status": "success", "url": single_url, "mode": "single"}).encode())
                     
-                    # Restart browser
-                    threading.Thread(target=lambda: os.system("systemctl restart kiosk.service"), daemon=True).start()
+                    # Try seamless DevTools navigation first, fallback to restart
+                    def navigate_seamlessly():
+                        import subprocess
+                        try:
+                            # Call the same navigation function used by CLI
+                            result = subprocess.run(['bash', '-c', f'source /opt/kiosk/kiosk-setup.sh && navigate_browser_to_url "{single_url}"'],
+                                                  capture_output=True, text=True, timeout=30)
+                            if result.returncode != 0:
+                                # DevTools navigation failed, restart as fallback
+                                os.system("systemctl restart kiosk.service")
+                        except:
+                            # Any error, restart as fallback
+                            os.system("systemctl restart kiosk.service")
+                    threading.Thread(target=navigate_seamlessly, daemon=True).start()
                 except:
                     self.send_response(500)
                     self.end_headers()
@@ -3016,7 +3028,7 @@ class KioskHandler(BaseHTTPRequestHandler):
                         }
                         self.wfile.write(json.dumps(response).encode())
                         
-                        # Restart browser
+                        # For playlist mode, restart is needed to properly initialize rotation
                         threading.Thread(target=lambda: os.system("systemctl restart kiosk.service"), daemon=True).start()
                     else:
                         self.send_response(400)
