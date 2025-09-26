@@ -187,7 +187,7 @@ RETRY_COUNT=3
 RETRY_DELAY=5
 HEALTH_CHECK_INTERVAL=30
 BROWSER_RESTART_THRESHOLD=5
-BROWSER_MEMORY_LIMIT=2048000  # 2GB in KB
+BROWSER_MEMORY_LIMIT=1536000  # 1.5GB in KB
 
 # URL playlist configuration
 DEFAULT_DISPLAY_TIME=30       # Default seconds per URL
@@ -852,23 +852,48 @@ except Exception as e:
     log_debug "Configuration updated successfully"
 }
 
+check_browser_crash() {
+    if [[ -d /tmp/chromium-kiosk/Crash\ Reports/pending ]] && [[ -n "$(ls -A /tmp/chromium-kiosk/Crash\ Reports/pending/ 2>/dev/null)" ]]; then
+        log_warn "Browser crash detected, clearing crash reports and restarting"
+        rm -rf /tmp/chromium-kiosk/Crash\ Reports/* 2>/dev/null || true
+        return 0  # Crash detected
+    fi
+    return 1  # No crash
+}
+
+cleanup_browser_memory() {
+    local debug_port=$DEBUG_PORT
+    if command -v curl >/dev/null 2>&1; then
+        # Try to force garbage collection via DevTools
+        local tabs_json
+        tabs_json=$(curl -s "http://localhost:$debug_port/json" 2>/dev/null | head -1)
+        if [[ -n "$tabs_json" ]] && command -v python3 >/dev/null 2>&1; then
+            local ws_url
+            ws_url=$(echo "$tabs_json" | python3 -c "import sys, json; print(json.load(sys.stdin)[0]['webSocketDebuggerUrl'])" 2>/dev/null)
+            if [[ -n "$ws_url" ]] && command -v websocat >/dev/null 2>&1; then
+                echo '{"id":1,"method":"Runtime.evaluate","params":{"expression":"window.gc && window.gc()"}}' | timeout 5 websocat "$ws_url" >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+}
+
 get_browser_memory_kb() {
     local chromium_pids
     chromium_pids=$(pgrep -f chromium 2>/dev/null)
-    
+
     if [[ -z "$chromium_pids" ]]; then
         echo "0"
         return
     fi
-    
+
 
 
     local memory_kb
     memory_kb=$(echo "$chromium_pids" | xargs -r ps -o rss= -p 2>/dev/null | awk '{sum+=$1} END {printf "%.0f", sum+0}')
-    
+
 
     local max_reasonable_kb=$((10 * 1024 * 1024))  # 10GB in KB
-    
+
     if [[ -z "$memory_kb" || "$memory_kb" == "0" ]]; then
         echo "0"
     elif [[ "$memory_kb" -gt "$max_reasonable_kb" ]]; then
@@ -1923,10 +1948,19 @@ monitor_browser_health() {
         local browser_memory
         browser_memory=$(get_browser_memory_kb)
         
-        if [[ $browser_memory -gt $max_memory_kb ]]; then
+        # Check for crashes first
+        if check_browser_crash; then
+            log_warn "Browser crash detected, restarting..."
+            recover_browser
+            ((restart_count++))
+        elif [[ $browser_memory -gt $max_memory_kb ]]; then
             log_warn "Browser memory usage high: ${browser_memory}KB > ${max_memory_kb}KB, restarting..."
             recover_browser
             ((restart_count++))
+        elif [[ $browser_memory -gt $((max_memory_kb * 3 / 4)) ]]; then
+            # Proactive cleanup when at 75% of limit
+            log_debug "Memory approaching limit (${browser_memory}KB), attempting cleanup..."
+            cleanup_browser_memory
         fi
         
 
@@ -1996,13 +2030,13 @@ start_browser_process() {
 
     local browser_cmd
     if [[ "$IS_ARM" == true ]]; then
-        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
         
         if [[ "$IS_RPI" == true ]]; then
             browser_cmd="$browser_cmd --disable-features=VizDisplayCompositor --disable-smooth-scrolling --disable-2d-canvas-clip-aa --disable-canvas-aa --disable-accelerated-2d-canvas"
         fi
     else
-        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
     fi
     
 
@@ -2696,13 +2730,13 @@ fi
 
 
 if [[ "$IS_ARM" == true ]]; then
-    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
     
     if [[ "$IS_RPI" == true ]]; then
         BROWSER_FLAGS="\$BROWSER_FLAGS --disable-features=VizDisplayCompositor --disable-smooth-scrolling --disable-2d-canvas-clip-aa --disable-canvas-aa --disable-accelerated-2d-canvas"
     fi
 else
-    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
 fi
 
 
