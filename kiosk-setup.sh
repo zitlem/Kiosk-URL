@@ -186,8 +186,12 @@ ERROR_LOG="/var/log/kiosk-errors.log"
 RETRY_COUNT=3
 RETRY_DELAY=5
 HEALTH_CHECK_INTERVAL=30
+PAGE_REFRESH_INTERVAL=300     # Refresh page every 5 minutes to prevent memory buildup
 BROWSER_RESTART_THRESHOLD=5
 BROWSER_MEMORY_LIMIT=1536000  # 1.5GB in KB
+MEMORY_LEAK_THRESHOLD=30      # Percentage increase over 5 minutes to trigger restart
+LAST_MEMORY_KB=0
+MEMORY_INCREASE_COUNT=0
 
 # URL playlist configuration
 DEFAULT_DISPLAY_TIME=30       # Default seconds per URL
@@ -334,15 +338,24 @@ attempt_recovery() {
 
 recover_browser() {
     log_info "Attempting browser recovery..."
-    
 
+    # Force kill all chromium processes aggressively
     pkill -f chromium 2>/dev/null || true
-    sleep 2
+    sleep 1
     pkill -9 -f chromium 2>/dev/null || true
-    
+    sleep 1
 
+    # Kill any remaining browser-related processes
+    pkill -f "chrome\|chromium" 2>/dev/null || true
+    pkill -9 -f "chrome\|chromium" 2>/dev/null || true
+
+    # Clear browser data and cache
     rm -rf /tmp/chromium-kiosk 2>/dev/null || true
-    
+    rm -rf /tmp/.org.chromium.Chromium* 2>/dev/null || true
+
+    # Reset memory tracking variables
+    LAST_MEMORY_KB=0
+    MEMORY_INCREASE_COUNT=0
 
     if ! pgrep Xorg >/dev/null; then
         log_warn "X server not running, restarting display system..."
@@ -852,28 +865,73 @@ except Exception as e:
     log_debug "Configuration updated successfully"
 }
 
+check_browser_responsive() {
+    local debug_port=$DEBUG_PORT
+
+    # Check if DevTools API is responsive
+    if ! timeout 5 curl -s "http://localhost:$debug_port/json" >/dev/null 2>&1; then
+        log_warn "Browser DevTools not responsive"
+        return 1
+    fi
+
+    # Check if processes are in zombie/uninterruptible state
+    local zombie_count
+    zombie_count=$(pgrep -f chromium | xargs -r ps -o stat= -p 2>/dev/null | grep -c '[ZD]' || echo "0")
+    if [[ $zombie_count -gt 0 ]]; then
+        log_warn "Browser has $zombie_count zombie/hung processes"
+        return 1
+    fi
+
+    return 0
+}
+
 check_browser_crash() {
+    # Check for crash reports
     if [[ -d /tmp/chromium-kiosk/Crash\ Reports/pending ]] && [[ -n "$(ls -A /tmp/chromium-kiosk/Crash\ Reports/pending/ 2>/dev/null)" ]]; then
         log_warn "Browser crash detected, clearing crash reports and restarting"
         rm -rf /tmp/chromium-kiosk/Crash\ Reports/* 2>/dev/null || true
         return 0  # Crash detected
     fi
+
+    # Check if browser is responsive
+    if ! check_browser_responsive; then
+        log_warn "Browser unresponsive, treating as crash"
+        return 0  # Unresponsive = crash
+    fi
+
     return 1  # No crash
+}
+
+refresh_browser_page() {
+    local debug_port=$DEBUG_PORT
+    if command -v curl >/dev/null 2>&1; then
+        # Get current tab and refresh it
+        local tab_id
+        tab_id=$(curl -s "http://localhost:$debug_port/json" 2>/dev/null | python3 -c "import sys, json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')" 2>/dev/null)
+
+        if [[ -n "$tab_id" ]]; then
+            curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
+                -H "Content-Type: application/json" \
+                -d '{"expression":"location.reload(true)"}' >/dev/null 2>&1 || true
+            log_debug "Browser page refreshed via DevTools"
+        fi
+    fi
 }
 
 cleanup_browser_memory() {
     local debug_port=$DEBUG_PORT
     if command -v curl >/dev/null 2>&1; then
-        # Try to force garbage collection via DevTools
-        local tabs_json
-        tabs_json=$(curl -s "http://localhost:$debug_port/json" 2>/dev/null | head -1)
-        if [[ -n "$tabs_json" ]] && command -v python3 >/dev/null 2>&1; then
-            local ws_url
-            ws_url=$(echo "$tabs_json" | python3 -c "import sys, json; print(json.load(sys.stdin)[0]['webSocketDebuggerUrl'])" 2>/dev/null)
-            if [[ -n "$ws_url" ]] && command -v websocat >/dev/null 2>&1; then
-                echo '{"id":1,"method":"Runtime.evaluate","params":{"expression":"window.gc && window.gc()"}}' | timeout 5 websocat "$ws_url" >/dev/null 2>&1 || true
-            fi
-        fi
+        # Force garbage collection
+        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
+            -H "Content-Type: application/json" \
+            -d '{"expression":"if(window.gc) window.gc(); if(window.CollectGarbage) window.CollectGarbage();"}' >/dev/null 2>&1 || true
+
+        # Clear caches
+        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
+            -H "Content-Type: application/json" \
+            -d '{"expression":"if(window.caches) window.caches.keys().then(names => names.forEach(name => window.caches.delete(name)));"}' >/dev/null 2>&1 || true
+
+        log_debug "Browser memory cleanup attempted"
     fi
 }
 
@@ -1926,7 +1984,8 @@ restore_config() {
 monitor_browser_health() {
     local max_memory_kb=$BROWSER_MEMORY_LIMIT
     local restart_count=0
-    
+    local last_refresh=0
+
     while true; do
         sleep $HEALTH_CHECK_INTERVAL
         
@@ -1957,10 +2016,35 @@ monitor_browser_health() {
             log_warn "Browser memory usage high: ${browser_memory}KB > ${max_memory_kb}KB, restarting..."
             recover_browser
             ((restart_count++))
-        elif [[ $browser_memory -gt $((max_memory_kb * 3 / 4)) ]]; then
-            # Proactive cleanup when at 75% of limit
-            log_debug "Memory approaching limit (${browser_memory}KB), attempting cleanup..."
-            cleanup_browser_memory
+        else
+            # Check for memory leaks
+            if [[ $LAST_MEMORY_KB -gt 0 ]] && [[ $browser_memory -gt 0 ]]; then
+                local memory_increase_pct
+                memory_increase_pct=$(( (browser_memory - LAST_MEMORY_KB) * 100 / LAST_MEMORY_KB ))
+
+                if [[ $memory_increase_pct -gt $MEMORY_LEAK_THRESHOLD ]]; then
+                    ((MEMORY_INCREASE_COUNT++))
+                    log_debug "Memory leak detected: ${memory_increase_pct}% increase (${MEMORY_INCREASE_COUNT}/3)"
+
+                    if [[ $MEMORY_INCREASE_COUNT -ge 3 ]]; then
+                        log_warn "Consistent memory leak detected, restarting browser..."
+                        recover_browser
+                        ((restart_count++))
+                        MEMORY_INCREASE_COUNT=0
+                    fi
+                else
+                    MEMORY_INCREASE_COUNT=0
+                fi
+            fi
+
+            if [[ $browser_memory -gt $((max_memory_kb * 3 / 4)) ]]; then
+                # Proactive cleanup when at 75% of limit
+                log_debug "Memory approaching limit (${browser_memory}KB), attempting cleanup..."
+                cleanup_browser_memory
+            fi
+
+            # Store current memory for leak detection
+            LAST_MEMORY_KB=$browser_memory
         fi
         
 
@@ -1968,7 +2052,14 @@ monitor_browser_health() {
             log_warn "X server not responsive, attempting display recovery..."
             recover_display
         fi
-        
+
+        # Periodic page refresh to prevent memory buildup
+        local current_time=$(date +%s)
+        if [[ $((current_time - last_refresh)) -ge $PAGE_REFRESH_INTERVAL ]]; then
+            log_debug "Performing periodic page refresh..."
+            refresh_browser_page
+            last_refresh=$current_time
+        fi
 
         if [[ $(($(date +%s) % 300)) -eq 0 ]]; then
             log_debug "Health check: Browser running, Memory: ${browser_memory}KB"
