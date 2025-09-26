@@ -187,6 +187,7 @@ RETRY_COUNT=3
 RETRY_DELAY=5
 HEALTH_CHECK_INTERVAL=30
 PAGE_REFRESH_INTERVAL=300     # Refresh page every 5 minutes to prevent memory buildup
+IFRAME_CHECK_INTERVAL=60      # Check iframe health every minute
 BROWSER_RESTART_THRESHOLD=5
 BROWSER_MEMORY_LIMIT=1536000  # 1.5GB in KB
 MEMORY_LEAK_THRESHOLD=30      # Percentage increase over 5 minutes to trigger restart
@@ -865,6 +866,34 @@ except Exception as e:
     log_debug "Configuration updated successfully"
 }
 
+check_iframe_health() {
+    local debug_port=$DEBUG_PORT
+    if command -v curl >/dev/null 2>&1; then
+        # Check for iframe errors or crashes via DevTools
+        local iframe_check
+        iframe_check=$(curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
+            -H "Content-Type: application/json" \
+            -d '{"expression":"Array.from(document.getElementsByTagName(\"iframe\")).map(f => ({src: f.src, loaded: f.contentDocument !== null, error: f.contentDocument === null && f.src !== \"\"}))"}' 2>/dev/null)
+
+        if echo "$iframe_check" | grep -q '"error":true'; then
+            log_warn "Iframe crash detected"
+            return 1
+        fi
+
+        # Check if any iframes are unresponsive
+        local unresponsive_check
+        unresponsive_check=$(curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
+            -H "Content-Type: application/json" \
+            -d '{"expression":"Array.from(document.getElementsByTagName(\"iframe\")).some(f => f.contentWindow && !f.contentWindow.document)"}' 2>/dev/null)
+
+        if echo "$unresponsive_check" | grep -q '"result":{"type":"boolean","value":true}'; then
+            log_warn "Unresponsive iframe detected"
+            return 1
+        fi
+    fi
+    return 0
+}
+
 check_browser_responsive() {
     local debug_port=$DEBUG_PORT
 
@@ -879,6 +908,11 @@ check_browser_responsive() {
     zombie_count=$(pgrep -f chromium | xargs -r ps -o stat= -p 2>/dev/null | grep -c '[ZD]' || echo "0")
     if [[ $zombie_count -gt 0 ]]; then
         log_warn "Browser has $zombie_count zombie/hung processes"
+        return 1
+    fi
+
+    # Check iframe health
+    if ! check_iframe_health; then
         return 1
     fi
 
@@ -902,19 +936,36 @@ check_browser_crash() {
     return 1  # No crash
 }
 
-refresh_browser_page() {
+refresh_iframes() {
     local debug_port=$DEBUG_PORT
     if command -v curl >/dev/null 2>&1; then
-        # Get current tab and refresh it
-        local tab_id
-        tab_id=$(curl -s "http://localhost:$debug_port/json" 2>/dev/null | python3 -c "import sys, json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')" 2>/dev/null)
+        # Refresh all iframes on the page
+        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
+            -H "Content-Type: application/json" \
+            -d '{"expression":"Array.from(document.getElementsByTagName(\"iframe\")).forEach(f => { if(f.src) { const src = f.src; f.src = \"\"; setTimeout(() => f.src = src, 100); } })"}' >/dev/null 2>&1 || true
+        log_debug "All iframes refreshed"
+    fi
+}
 
-        if [[ -n "$tab_id" ]]; then
-            curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
-                -H "Content-Type: application/json" \
-                -d '{"expression":"location.reload(true)"}' >/dev/null 2>&1 || true
-            log_debug "Browser page refreshed via DevTools"
+refresh_browser_page() {
+    local debug_port=$DEBUG_PORT
+    local force_refresh=${1:-false}
+
+    if command -v curl >/dev/null 2>&1; then
+        # First try to refresh just iframes if not forcing full refresh
+        if [[ "$force_refresh" != "true" ]]; then
+            # Check if iframe refresh is sufficient
+            if check_iframe_health; then
+                refresh_iframes
+                return 0
+            fi
         fi
+
+        # Full page refresh if iframe refresh isn't enough
+        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
+            -H "Content-Type: application/json" \
+            -d '{"expression":"location.reload(true)"}' >/dev/null 2>&1 || true
+        log_debug "Browser page refreshed via DevTools"
     fi
 }
 
@@ -1985,6 +2036,7 @@ monitor_browser_health() {
     local max_memory_kb=$BROWSER_MEMORY_LIMIT
     local restart_count=0
     local last_refresh=0
+    local last_iframe_check=0
 
     while true; do
         sleep $HEALTH_CHECK_INTERVAL
@@ -2053,11 +2105,20 @@ monitor_browser_health() {
             recover_display
         fi
 
-        # Periodic page refresh to prevent memory buildup
+        # Periodic iframe health check (more frequent than full refresh)
         local current_time=$(date +%s)
+        if [[ $((current_time - last_iframe_check)) -ge $IFRAME_CHECK_INTERVAL ]]; then
+            if ! check_iframe_health; then
+                log_warn "Iframe issues detected, refreshing iframes..."
+                refresh_iframes
+            fi
+            last_iframe_check=$current_time
+        fi
+
+        # Periodic page refresh to prevent memory buildup
         if [[ $((current_time - last_refresh)) -ge $PAGE_REFRESH_INTERVAL ]]; then
             log_debug "Performing periodic page refresh..."
-            refresh_browser_page
+            refresh_browser_page true  # Force full refresh
             last_refresh=$current_time
         fi
 
@@ -2121,13 +2182,13 @@ start_browser_process() {
 
     local browser_cmd
     if [[ "$IS_ARM" == true ]]; then
-        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --site-per-process --disable-site-isolation-trials --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
         
         if [[ "$IS_RPI" == true ]]; then
             browser_cmd="$browser_cmd --disable-features=VizDisplayCompositor --disable-smooth-scrolling --disable-2d-canvas-clip-aa --disable-canvas-aa --disable-accelerated-2d-canvas"
         fi
     else
-        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+        browser_cmd="$CHROMIUM_PATH --no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --site-per-process --disable-site-isolation-trials --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
     fi
     
 
@@ -2821,13 +2882,13 @@ fi
 
 
 if [[ "$IS_ARM" == true ]]; then
-    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu-sandbox --use-gl=egl --enable-gpu-rasterization --disable-web-security --disable-features=TranslateUI --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --site-per-process --disable-site-isolation-trials --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
     
     if [[ "$IS_RPI" == true ]]; then
         BROWSER_FLAGS="\$BROWSER_FLAGS --disable-features=VizDisplayCompositor --disable-smooth-scrolling --disable-2d-canvas-clip-aa --disable-canvas-aa --disable-accelerated-2d-canvas"
     fi
 else
-    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
+    BROWSER_FLAGS="--no-first-run --no-default-browser-check --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --noerrdialogs --kiosk --start-maximized --disable-gpu --disable-software-rasterizer --disable-web-security --disable-features=TranslateUI,VizDisplayCompositor --disable-ipc-flooding-protection --no-sandbox --disable-setuid-sandbox --force-device-scale-factor=1 --memory-pressure-off --max_old_space_size=512 --js-flags=--max-old-space-size=512 --aggressive-cache-discard --disable-background-networking --site-per-process --disable-site-isolation-trials --display=:0 --remote-debugging-port=$DEBUG_PORT --remote-allow-origins=* --user-data-dir=/tmp/chromium-kiosk"
 fi
 
 
