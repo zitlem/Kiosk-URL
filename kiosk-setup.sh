@@ -189,7 +189,24 @@ HEALTH_CHECK_INTERVAL=30
 PAGE_REFRESH_INTERVAL=60      # Refresh page every 1 minute to prevent memory buildup
 IFRAME_CHECK_INTERVAL=30      # Check iframe health every 30 seconds
 BROWSER_RESTART_THRESHOLD=5
-BROWSER_MEMORY_LIMIT=1048576  # 1GB in KB
+# Dynamic browser memory limit based on system RAM
+SYSTEM_MEMORY_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+if [[ $SYSTEM_MEMORY_KB -gt 8388608 ]]; then
+    # >8GB RAM: Allow browser to use 4GB
+    BROWSER_MEMORY_LIMIT=4194304
+elif [[ $SYSTEM_MEMORY_KB -gt 4194304 ]]; then
+    # 4-8GB RAM: Allow browser to use 2GB
+    BROWSER_MEMORY_LIMIT=2097152
+elif [[ $SYSTEM_MEMORY_KB -gt 2097152 ]]; then
+    # 2-4GB RAM: Allow browser to use 1.5GB
+    BROWSER_MEMORY_LIMIT=1572864
+elif [[ $SYSTEM_MEMORY_KB -gt 1048576 ]]; then
+    # 1-2GB RAM: Allow browser to use 768MB
+    BROWSER_MEMORY_LIMIT=786432
+else
+    # <1GB RAM: Allow browser to use 512MB
+    BROWSER_MEMORY_LIMIT=524288
+fi
 MEMORY_LEAK_THRESHOLD=30      # Percentage increase over 5 minutes to trigger restart
 LAST_MEMORY_KB=0
 MEMORY_INCREASE_COUNT=0
@@ -904,9 +921,12 @@ check_browser_responsive() {
     fi
 
     # Check if processes are in zombie/uninterruptible state
-    local zombie_count
-    zombie_count=$(pgrep -f chromium | xargs -r ps -o stat= -p 2>/dev/null | grep -c '[ZD]' 2>/dev/null || echo "0")
-    if [[ "$zombie_count" -gt 0 ]]; then
+    local zombie_count=0
+    if pgrep -f chromium >/dev/null 2>&1; then
+        zombie_count=$(pgrep -f chromium | xargs -r ps -o stat= -p 2>/dev/null | grep -c '[ZD]' 2>/dev/null || echo "0")
+        zombie_count=${zombie_count:-0}  # Ensure it's not empty
+    fi
+    if [[ ${zombie_count} -gt 0 ]]; then
         log_warn "Browser has $zombie_count zombie/hung processes"
         return 1
     fi
