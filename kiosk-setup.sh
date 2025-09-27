@@ -1986,7 +1986,7 @@ monitor_browser_health() {
         if ! pgrep -f chromium >/dev/null; then
             log_warn "Browser not running, attempting restart..."
             recover_browser
-            ((restart_count++))
+            restart_count=$((restart_count + 1))
             
             if [[ $restart_count -ge $BROWSER_RESTART_THRESHOLD ]]; then
                 log_critical "Browser restarted $restart_count times, may need manual intervention"
@@ -2004,7 +2004,7 @@ monitor_browser_health() {
         if [[ $browser_memory -gt $max_memory_kb ]]; then
             log_warn "Browser memory usage high: ${browser_memory}KB > ${max_memory_kb}KB, restarting..."
             recover_browser
-            ((restart_count++))
+            restart_count=$((restart_count + 1))
         else
             # Simple monitoring - just log current memory usage
             log_debug "Browser memory within limits: ${browser_memory}KB"
