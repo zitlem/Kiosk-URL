@@ -905,8 +905,8 @@ check_browser_responsive() {
 
     # Check if processes are in zombie/uninterruptible state
     local zombie_count
-    zombie_count=$(pgrep -f chromium | xargs -r ps -o stat= -p 2>/dev/null | grep -c '[ZD]' || echo "0")
-    if [[ $zombie_count -gt 0 ]]; then
+    zombie_count=$(pgrep -f chromium | xargs -r ps -o stat= -p 2>/dev/null | grep -c '[ZD]' 2>/dev/null || echo "0")
+    if [[ "$zombie_count" -gt 0 ]]; then
         log_warn "Browser has $zombie_count zombie/hung processes"
         return 1
     fi
