@@ -355,24 +355,24 @@ attempt_recovery() {
 recover_browser() {
     log_info "Fast browser restart (no service restart)..."
 
-    # Get current URL before restart
-    local current_url
-    current_url=$(get_config_value "kiosk.url" "http://example.com")
+    # Signal the startup script to restart the browser
+    local service_pid
+    service_pid=$(cat /tmp/kiosk-service.pid 2>/dev/null || echo "")
 
-    # Force kill all chromium processes quickly
-    pkill -9 -f chromium 2>/dev/null || true
+    if [[ -n "$service_pid" ]] && kill -0 "$service_pid" 2>/dev/null; then
+        log_debug "Signaling service PID $service_pid to restart browser"
+        kill -USR1 "$service_pid" 2>/dev/null
+        sleep 2  # Give it time to restart
 
-    # Clear browser cache quickly
-    rm -rf /tmp/chromium-kiosk 2>/dev/null || true
-
-    # Memory tracking variables removed - fast restart is simpler
-
-    # Restart browser directly (much faster than service restart)
-    log_debug "Restarting browser with URL: $current_url"
-    if start_browser_process "$current_url"; then
-        log_info "Browser restarted successfully"
+        # Verify browser restarted
+        if pgrep -f "chromium.*user-data-dir=/tmp/chromium-kiosk" >/dev/null; then
+            log_info "Browser restarted successfully via signal"
+        else
+            log_warn "Signal restart failed, falling back to service restart..."
+            systemctl restart kiosk.service || log_error "Failed to restart kiosk service"
+        fi
     else
-        log_warn "Fast browser restart failed, falling back to service restart..."
+        log_warn "Cannot find service PID, falling back to service restart..."
         systemctl restart kiosk.service || log_error "Failed to restart kiosk service"
     fi
 }
@@ -2798,9 +2798,57 @@ else
 fi
 
 
-$CHROMIUM_PATH \$BROWSER_FLAGS "\$URL" &
-BROWSER_PID=\$!
-echo \$BROWSER_PID > /tmp/kiosk-browser.pid
+start_kiosk_browser() {
+    local url="\$1"
+    echo "Starting browser with URL: \$url"
+    $CHROMIUM_PATH \$BROWSER_FLAGS "\$url" &
+    BROWSER_PID=\$!
+    echo \$BROWSER_PID > /tmp/kiosk-browser.pid
+    echo "Browser started with PID: \$BROWSER_PID"
+}
+
+restart_kiosk_browser() {
+    echo "Restarting browser..."
+
+    # Get current browser PID
+    local current_pid
+    current_pid=\$(cat /tmp/kiosk-browser.pid 2>/dev/null || echo "")
+
+    # Kill current browser gracefully
+    if [[ -n "\$current_pid" ]] && kill -0 "\$current_pid" 2>/dev/null; then
+        echo "Stopping browser PID: \$current_pid"
+        kill -TERM "\$current_pid" 2>/dev/null || true
+        sleep 2
+        kill -KILL "\$current_pid" 2>/dev/null || true
+    fi
+
+    # Clean up any remaining chromium processes
+    pkill -f "chromium.*user-data-dir=/tmp/chromium-kiosk" 2>/dev/null || true
+
+    # Clear browser cache
+    rm -rf /tmp/chromium-kiosk 2>/dev/null || true
+
+    # Get current URL from config
+    local current_url
+    current_url=\$(python3 -c "
+import json
+try:
+    with open('$CONFIG_FILE', 'r') as f:
+        data = json.load(f)
+    print(data.get('kiosk', {}).get('url', 'http://example.com'))
+except:
+    print('http://example.com')
+" 2>/dev/null)
+
+    # Restart browser
+    start_kiosk_browser "\$current_url"
+}
+
+# Create restart signal handler
+echo \$\$ > /tmp/kiosk-service.pid
+trap restart_kiosk_browser USR1
+
+start_kiosk_browser "\$URL"
 
 # Start browser monitoring for memory management (single URL mode only)
 if [[ "\$PLAYLIST_ENABLED" != "true" ]]; then
