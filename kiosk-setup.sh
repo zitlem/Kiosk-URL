@@ -2973,7 +2973,20 @@ except Exception as e:
 fi
 
 
-wait \$BROWSER_PID
+# Keep the main process running and handle browser restarts
+while true; do
+    # Get current browser PID
+    CURRENT_BROWSER_PID=\$(cat /tmp/kiosk-browser.pid 2>/dev/null || echo "")
+
+    if [[ -n "\$CURRENT_BROWSER_PID" ]] && kill -0 "\$CURRENT_BROWSER_PID" 2>/dev/null; then
+        # Wait for current browser process, but don't exit if it dies
+        wait "\$CURRENT_BROWSER_PID" 2>/dev/null || true
+        sleep 1  # Brief pause before checking again
+    else
+        # No browser running, wait a bit and check again
+        sleep 2
+    fi
+done
 EOF
     
     chmod +x "$INSTALL_DIR/start_kiosk.sh"
