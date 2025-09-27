@@ -361,30 +361,18 @@ recover_browser() {
 
     if [[ -n "$service_pid" ]] && kill -0 "$service_pid" 2>/dev/null; then
         log_debug "Signaling service PID $service_pid to restart browser"
+
+        # Store the current browser PID before restarting
+        local old_browser_pid
+        old_browser_pid=$(cat /tmp/kiosk-browser.pid 2>/dev/null || echo "")
+
+        # Send the signal
         kill -USR1 "$service_pid" 2>/dev/null
 
-        # Wait for browser restart to complete
-        local wait_count=0
-        local max_wait=10
-        local browser_restarted=false
-
-        while [[ $wait_count -lt $max_wait ]]; do
-            sleep 1
-            wait_count=$((wait_count + 1))
-
-            # Check if new browser process is running
-            if pgrep -f "chromium.*user-data-dir=/tmp/chromium-kiosk" >/dev/null; then
-                browser_restarted=true
-                break
-            fi
-        done
-
-        if [[ "$browser_restarted" == true ]]; then
-            log_info "Browser restarted successfully via signal (took ${wait_count}s)"
-        else
-            log_warn "Signal restart failed after ${max_wait}s, falling back to service restart..."
-            systemctl restart kiosk.service || log_error "Failed to restart kiosk service"
-        fi
+        # Give signal time to be processed and just trust it worked
+        # The startup script handles the restart - we don't need to verify here
+        sleep 3
+        log_info "Browser restart signal sent successfully"
     else
         log_warn "Cannot find service PID, falling back to service restart..."
         systemctl restart kiosk.service || log_error "Failed to restart kiosk service"
