@@ -2037,6 +2037,7 @@ monitor_browser_health() {
     local restart_count=0
     local last_refresh=0
     local last_iframe_check=0
+    local last_auto_refresh=0
 
     while true; do
         sleep $HEALTH_CHECK_INTERVAL
@@ -2115,8 +2116,23 @@ monitor_browser_health() {
             last_iframe_check=$current_time
         fi
 
-        # Periodic page refresh to prevent memory buildup
-        if [[ $((current_time - last_refresh)) -ge $PAGE_REFRESH_INTERVAL ]]; then
+        # Auto-refresh for single URL mode (if enabled)
+        local auto_refresh_enabled
+        auto_refresh_enabled=$(get_config_value "kiosk.auto_refresh_enabled" "false")
+
+        if [[ "$auto_refresh_enabled" == "true" ]]; then
+            local auto_refresh_interval
+            auto_refresh_interval=$(get_config_value "kiosk.auto_refresh_interval" "60")
+
+            if [[ $((current_time - last_auto_refresh)) -ge $auto_refresh_interval ]]; then
+                log_debug "Performing auto-refresh (every ${auto_refresh_interval}s)..."
+                refresh_browser_page true
+                last_auto_refresh=$current_time
+            fi
+        fi
+
+        # Periodic page refresh to prevent memory buildup (fallback)
+        if [[ "$auto_refresh_enabled" != "true" ]] && [[ $((current_time - last_refresh)) -ge $PAGE_REFRESH_INTERVAL ]]; then
             log_debug "Performing periodic page refresh..."
             refresh_browser_page true  # Force full refresh
             last_refresh=$current_time
@@ -3688,10 +3704,15 @@ get_url() {
 
 set_url() {
     local url="$1"
-    
+    local refresh_rate="$2"
+
     if [[ -z "$url" ]]; then
         log_error "URL is required"
-        echo "Usage: kiosk set-url <URL>"
+        echo "Usage: kiosk set-url <URL> [refresh_rate_seconds]"
+        echo "Examples:"
+        echo "  kiosk set-url http://google.com 30  # Refresh every 30 seconds"
+        echo "  kiosk set-url http://google.com 0   # Disable auto-refresh"
+        echo "  kiosk set-url http://google.com     # Disable auto-refresh (default)"
         exit 1
     fi
     
@@ -3702,10 +3723,33 @@ set_url() {
     fi
     
 
+    # Validate refresh rate if provided
+    if [[ -n "$refresh_rate" ]]; then
+        if ! [[ "$refresh_rate" =~ ^[0-9]+$ ]]; then
+            log_error "Refresh rate must be a number (0 = disabled, >=10 = enabled)"
+            exit 1
+        fi
+
+        if [[ "$refresh_rate" -eq 0 ]]; then
+            set_config_value "kiosk.auto_refresh_enabled" "false"
+            log_info "Auto-refresh disabled"
+        elif [[ "$refresh_rate" -lt 10 ]]; then
+            log_error "Refresh rate must be >= 10 seconds (or 0 to disable)"
+            exit 1
+        else
+            set_config_value "kiosk.auto_refresh_interval" "$refresh_rate"
+            set_config_value "kiosk.auto_refresh_enabled" "true"
+            log_info "Auto-refresh enabled: every $refresh_rate seconds"
+        fi
+    else
+        set_config_value "kiosk.auto_refresh_enabled" "false"
+        log_info "Auto-refresh disabled (no refresh rate specified)"
+    fi
+
     set_config_value "kiosk.url" "$url"
     set_config_value "playlist.enabled" "false"
-    
-    
+
+
     log_info "URL set to: $url"
     
 
@@ -4008,7 +4052,7 @@ show_help() {
     echo "MANAGEMENT:"
     echo "  kiosk status                     - Show system status"
     echo "  kiosk get-url                    - Get current URL"
-    echo "  kiosk set-url <URL>              - Set URL and restart browser"
+    echo "  kiosk set-url <URL> [refresh_rate] - Set URL and restart browser (refresh_rate in seconds)"
     echo "  kiosk get-rotation               - Get current display orientation"
     echo "  kiosk set-display-orientation <orientation> - Set display orientation (normal|left|right|inverted)"
     echo "  kiosk get-api-key                - Show current API key"
@@ -4027,7 +4071,9 @@ show_help() {
     echo "  kiosk help                       - Show this help"
     echo
     echo "EXAMPLES:"
-    echo "  kiosk set-url http://google.com"
+    echo "  kiosk set-url http://google.com 30    # Refresh every 30 seconds"
+    echo "  kiosk set-url http://google.com 0     # Disable auto-refresh"
+    echo "  kiosk set-url http://google.com       # Disable auto-refresh (default)"
     echo "  kiosk set-display-orientation left"
     echo "  kiosk logs kiosk"
     echo
