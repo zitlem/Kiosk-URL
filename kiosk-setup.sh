@@ -1998,12 +1998,8 @@ monitor_browser_health() {
         local browser_memory
         browser_memory=$(get_browser_memory_kb)
         
-        # Check for crashes first
-        if check_browser_crash; then
-            log_warn "Browser crash detected, restarting..."
-            recover_browser
-            ((restart_count++))
-        elif [[ $browser_memory -gt $max_memory_kb ]]; then
+        # Check memory usage (crash detection removed - memory management is sufficient)
+        if [[ $browser_memory -gt $max_memory_kb ]]; then
             log_warn "Browser memory usage high: ${browser_memory}KB > ${max_memory_kb}KB, restarting..."
             recover_browser
             ((restart_count++))
