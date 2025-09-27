@@ -1976,6 +1976,9 @@ restore_config() {
 
 
 monitor_browser_health() {
+    # Ignore USR1 signals in monitoring process to avoid exit when main process receives signal
+    trap : USR1
+
     local max_memory_kb=$BROWSER_MEMORY_LIMIT
     local restart_count=0
 
