@@ -2640,6 +2640,8 @@ CLI Commands
 ===============================================
   kiosk status
   kiosk set-url http://your-site.com
+  kiosk set-url http://your-site.com 30     # Auto-refresh every 30 seconds
+  kiosk set-url http://your-site.com 0      # Disable auto-refresh
   kiosk get-url
   kiosk set-display-orientation left
   kiosk get-rotation
@@ -2664,6 +2666,8 @@ curl "http://$ip_addr/api-info?api_key=$api_key"
 
 
 curl -X POST "http://$ip_addr/set-url?api_key=$api_key&url=http://google.com"
+curl -X POST "http://$ip_addr/set-url?api_key=$api_key&url=http://google.com&refresh_rate=30"
+curl -X POST "http://$ip_addr/set-url?api_key=$api_key&url=http://google.com&refresh_rate=0"
 curl "http://$ip_addr/get-url?api_key=$api_key"
 
 
@@ -2691,6 +2695,10 @@ API Endpoints - Advanced JSON Commands
 curl -X POST "http://$ip_addr/set-url?api_key=$api_key" \\
      -H "Content-Type: application/json" \\
      -d '{"url": "http://dashboard.example.com"}'
+
+curl -X POST "http://$ip_addr/set-url?api_key=$api_key" \\
+     -H "Content-Type: application/json" \\
+     -d '{"url": "http://dashboard.example.com", "refresh_rate": 30}'
 
 
 curl -X POST "http://$ip_addr/playlist-add?api_key=$api_key" \\
@@ -3265,13 +3273,19 @@ class KioskCommandHandler(BaseHTTPRequestHandler):
             parsed_url = urlparse(self.path)
             query_params = parse_qs(parsed_url.query)
             url_param = query_params.get('url', [''])[0]
+            refresh_param = query_params.get('refresh_rate', [''])[0] or query_params.get('refresh', [''])[0]
 
             if url_param:
-
-                result = execute_kiosk_command('set-url', url_param.strip())
+                if refresh_param:
+                    result = execute_kiosk_command('set-url', url_param.strip(), refresh_param.strip())
+                else:
+                    result = execute_kiosk_command('set-url', url_param.strip())
             elif data.get('url'):
-
-                result = execute_kiosk_command('set-url', data['url'])
+                refresh_rate = data.get('refresh_rate') or data.get('refresh')
+                if refresh_rate:
+                    result = execute_kiosk_command('set-url', data['url'], str(refresh_rate))
+                else:
+                    result = execute_kiosk_command('set-url', data['url'])
             elif data.get('urls'):
 
                 self.send_response(400)
@@ -3689,8 +3703,9 @@ print_setup_info() {
     echo "   1. sudo reboot" >&2
     echo "   2. System auto-starts kiosk + API gateway" >&2
     echo "   3. Set URL: curl -X POST \"http://$ip_addr/set-url?api_key=$api_key&url=http://your-site.com\"" >&2
-    echo "   4. CLI: kiosk status | kiosk set-url <URL> | kiosk playlist" >&2
-    echo "   5. Full examples: cat $INSTALL_DIR/USAGE_EXAMPLES.md" >&2
+    echo "   4. Auto-refresh: curl -X POST \"http://$ip_addr/set-url?api_key=$api_key&url=http://your-site.com&refresh_rate=30\"" >&2
+    echo "   5. CLI: kiosk status | kiosk set-url <URL> [refresh_rate] | kiosk playlist" >&2
+    echo "   6. Full examples: cat $INSTALL_DIR/USAGE_EXAMPLES.md" >&2
     echo "========================================" >&2
 }
 
@@ -4235,7 +4250,7 @@ main() {
             get_url
             ;;
         "set-url")
-            set_url "$2"
+            set_url "$2" "$3"
             ;;
         "get-rotation")
             get_rotation
