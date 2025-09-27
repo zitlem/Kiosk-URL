@@ -370,7 +370,7 @@ recover_browser() {
 
         while [[ $wait_count -lt $max_wait ]]; do
             sleep 1
-            ((wait_count++))
+            wait_count=$((wait_count + 1))
 
             # Check if new browser process is running
             if pgrep -f "chromium.*user-data-dir=/tmp/chromium-kiosk" >/dev/null; then
