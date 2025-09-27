@@ -2920,6 +2920,23 @@ $CHROMIUM_PATH \$BROWSER_FLAGS "\$URL" &
 BROWSER_PID=\$!
 echo \$BROWSER_PID > /tmp/kiosk-browser.pid
 
+# Start browser monitoring for auto-refresh (single URL mode only)
+if [[ "\$PLAYLIST_ENABLED" != "true" ]]; then
+    echo "Starting browser monitoring for auto-refresh..."
+    (
+        sleep 5  # Wait for browser to start
+
+        # Source the main script functions
+        source $INSTALL_DIR/kiosk-setup.sh
+
+        # Start monitoring
+        monitor_browser_health
+    ) &
+    MONITOR_PID=\$!
+    echo \$MONITOR_PID > /tmp/kiosk-monitor.pid
+    echo "Browser monitoring started (PID: \$MONITOR_PID)"
+fi
+
 
 if [[ "\$PLAYLIST_ENABLED" == "true" ]]; then
     echo "Starting playlist cycling service..."
