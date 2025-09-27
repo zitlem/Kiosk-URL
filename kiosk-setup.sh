@@ -2009,6 +2009,7 @@ monitor_browser_health() {
             ((restart_count++))
         else
             # Simple monitoring - just log current memory usage
+            log_debug "Browser memory within limits: ${browser_memory}KB"
         fi
         
 
