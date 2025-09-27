@@ -186,30 +186,28 @@ ERROR_LOG="/var/log/kiosk-errors.log"
 RETRY_COUNT=3
 RETRY_DELAY=5
 HEALTH_CHECK_INTERVAL=30
-PAGE_REFRESH_INTERVAL=60      # Refresh page every 1 minute to prevent memory buildup
-IFRAME_CHECK_INTERVAL=30      # Check iframe health every 30 seconds
+# PAGE_REFRESH_INTERVAL removed - auto-refresh handles page refreshing when enabled
+# IFRAME_CHECK_INTERVAL removed - auto-refresh handles page health
 BROWSER_RESTART_THRESHOLD=5
-# Dynamic browser memory limit based on system RAM
+# Dynamic browser memory limit based on system RAM (more generous allocation)
 SYSTEM_MEMORY_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
 if [[ $SYSTEM_MEMORY_KB -gt 8388608 ]]; then
-    # >8GB RAM: Allow browser to use 4GB
-    BROWSER_MEMORY_LIMIT=4194304
+    # >8GB RAM: Allow browser to use 6GB (75%)
+    BROWSER_MEMORY_LIMIT=6291456
 elif [[ $SYSTEM_MEMORY_KB -gt 4194304 ]]; then
-    # 4-8GB RAM: Allow browser to use 2GB
-    BROWSER_MEMORY_LIMIT=2097152
+    # 4-8GB RAM: Allow browser to use 4GB (67%)
+    BROWSER_MEMORY_LIMIT=4194304
 elif [[ $SYSTEM_MEMORY_KB -gt 2097152 ]]; then
-    # 2-4GB RAM: Allow browser to use 1.5GB
-    BROWSER_MEMORY_LIMIT=1572864
+    # 2-4GB RAM: Allow browser to use 2.5GB (70%)
+    BROWSER_MEMORY_LIMIT=2621440
 elif [[ $SYSTEM_MEMORY_KB -gt 1048576 ]]; then
-    # 1-2GB RAM: Allow browser to use 768MB
-    BROWSER_MEMORY_LIMIT=786432
+    # 1-2GB RAM: Allow browser to use 1.2GB (65%)
+    BROWSER_MEMORY_LIMIT=1228800
 else
-    # <1GB RAM: Allow browser to use 512MB
-    BROWSER_MEMORY_LIMIT=524288
+    # <1GB RAM: Allow browser to use 700MB (70%)
+    BROWSER_MEMORY_LIMIT=716800
 fi
-MEMORY_LEAK_THRESHOLD=30      # Percentage increase over 5 minutes to trigger restart
-LAST_MEMORY_KB=0
-MEMORY_INCREASE_COUNT=0
+# Memory leak detection removed - fast browser restart is more effective
 
 # URL playlist configuration
 DEFAULT_DISPLAY_TIME=30       # Default seconds per URL
@@ -355,33 +353,26 @@ attempt_recovery() {
 }
 
 recover_browser() {
-    log_info "Attempting browser recovery..."
+    log_info "Fast browser restart (no service restart)..."
 
-    # Force kill all chromium processes aggressively
-    pkill -f chromium 2>/dev/null || true
-    sleep 1
+    # Get current URL before restart
+    local current_url
+    current_url=$(get_config_value "kiosk.url" "http://example.com")
+
+    # Force kill all chromium processes quickly
     pkill -9 -f chromium 2>/dev/null || true
-    sleep 1
 
-    # Kill any remaining browser-related processes
-    pkill -f "chrome\|chromium" 2>/dev/null || true
-    pkill -9 -f "chrome\|chromium" 2>/dev/null || true
-
-    # Clear browser data and cache
+    # Clear browser cache quickly
     rm -rf /tmp/chromium-kiosk 2>/dev/null || true
-    rm -rf /tmp/.org.chromium.Chromium* 2>/dev/null || true
 
-    # Reset memory tracking variables
-    LAST_MEMORY_KB=0
-    MEMORY_INCREASE_COUNT=0
+    # Memory tracking variables removed - fast restart is simpler
 
-    if ! pgrep Xorg >/dev/null; then
-        log_warn "X server not running, restarting display system..."
-        recover_display
-    fi
-    
-
-    if systemctl is-enabled kiosk.service >/dev/null 2>&1; then
+    # Restart browser directly (much faster than service restart)
+    log_debug "Restarting browser with URL: $current_url"
+    if start_browser_process "$current_url"; then
+        log_info "Browser restarted successfully"
+    else
+        log_warn "Fast browser restart failed, falling back to service restart..."
         systemctl restart kiosk.service || log_error "Failed to restart kiosk service"
     fi
 }
@@ -883,33 +874,7 @@ except Exception as e:
     log_debug "Configuration updated successfully"
 }
 
-check_iframe_health() {
-    local debug_port=$DEBUG_PORT
-    if command -v curl >/dev/null 2>&1; then
-        # Check for iframe errors or crashes via DevTools
-        local iframe_check
-        iframe_check=$(curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
-            -H "Content-Type: application/json" \
-            -d '{"expression":"Array.from(document.getElementsByTagName(\"iframe\")).map(f => ({src: f.src, loaded: f.contentDocument !== null, error: f.contentDocument === null && f.src !== \"\"}))"}' 2>/dev/null)
-
-        if echo "$iframe_check" | grep -q '"error":true'; then
-            log_warn "Iframe crash detected"
-            return 1
-        fi
-
-        # Check if any iframes are unresponsive
-        local unresponsive_check
-        unresponsive_check=$(curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
-            -H "Content-Type: application/json" \
-            -d '{"expression":"Array.from(document.getElementsByTagName(\"iframe\")).some(f => f.contentWindow && !f.contentWindow.document)"}' 2>/dev/null)
-
-        if echo "$unresponsive_check" | grep -q '"result":{"type":"boolean","value":true}'; then
-            log_warn "Unresponsive iframe detected"
-            return 1
-        fi
-    fi
-    return 0
-}
+# check_iframe_health() removed - auto-refresh handles page health
 
 check_browser_responsive() {
     local debug_port=$DEBUG_PORT
@@ -934,10 +899,7 @@ check_browser_responsive() {
         return 1
     fi
 
-    # Check iframe health
-    if ! check_iframe_health; then
-        return 1
-    fi
+    # Iframe health checking removed - auto-refresh handles page health
 
     return 0
 }
@@ -959,55 +921,11 @@ check_browser_crash() {
     return 1  # No crash
 }
 
-refresh_iframes() {
-    local debug_port=$DEBUG_PORT
-    if command -v curl >/dev/null 2>&1; then
-        # Refresh all iframes on the page
-        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
-            -H "Content-Type: application/json" \
-            -d '{"expression":"Array.from(document.getElementsByTagName(\"iframe\")).forEach(f => { if(f.src) { const src = f.src; f.src = \"\"; setTimeout(() => f.src = src, 100); } })"}' >/dev/null 2>&1 || true
-        log_debug "All iframes refreshed"
-    fi
-}
+# refresh_iframes() removed - auto-refresh handles page health
 
-refresh_browser_page() {
-    local debug_port=$DEBUG_PORT
-    local force_refresh=${1:-false}
+# refresh_browser_page() removed - fast browser restart is more effective
 
-    if command -v curl >/dev/null 2>&1; then
-        # First try to refresh just iframes if not forcing full refresh
-        if [[ "$force_refresh" != "true" ]]; then
-            # Check if iframe refresh is sufficient
-            if check_iframe_health; then
-                refresh_iframes
-                return 0
-            fi
-        fi
-
-        # Full page refresh if iframe refresh isn't enough
-        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
-            -H "Content-Type: application/json" \
-            -d '{"expression":"location.reload(true)"}' >/dev/null 2>&1 || true
-        log_debug "Browser page refreshed via DevTools"
-    fi
-}
-
-cleanup_browser_memory() {
-    local debug_port=$DEBUG_PORT
-    if command -v curl >/dev/null 2>&1; then
-        # Force garbage collection
-        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
-            -H "Content-Type: application/json" \
-            -d '{"expression":"if(window.gc) window.gc(); if(window.CollectGarbage) window.CollectGarbage();"}' >/dev/null 2>&1 || true
-
-        # Clear caches
-        curl -s -X POST "http://localhost:$debug_port/json/runtime/evaluate" \
-            -H "Content-Type: application/json" \
-            -d '{"expression":"if(window.caches) window.caches.keys().then(names => names.forEach(name => window.caches.delete(name)));"}' >/dev/null 2>&1 || true
-
-        log_debug "Browser memory cleanup attempted"
-    fi
-}
+# cleanup_browser_memory() removed - fast browser restart is more effective than cleanup
 
 get_browser_memory_kb() {
     local chromium_pids
@@ -2058,9 +1976,6 @@ restore_config() {
 monitor_browser_health() {
     local max_memory_kb=$BROWSER_MEMORY_LIMIT
     local restart_count=0
-    local last_refresh=0
-    local last_iframe_check=0
-    local last_auto_refresh=0
 
     while true; do
         sleep $HEALTH_CHECK_INTERVAL
@@ -2093,34 +2008,7 @@ monitor_browser_health() {
             recover_browser
             ((restart_count++))
         else
-            # Check for memory leaks
-            if [[ $LAST_MEMORY_KB -gt 0 ]] && [[ $browser_memory -gt 0 ]]; then
-                local memory_increase_pct
-                memory_increase_pct=$(( (browser_memory - LAST_MEMORY_KB) * 100 / LAST_MEMORY_KB ))
-
-                if [[ $memory_increase_pct -gt $MEMORY_LEAK_THRESHOLD ]]; then
-                    ((MEMORY_INCREASE_COUNT++))
-                    log_debug "Memory leak detected: ${memory_increase_pct}% increase (${MEMORY_INCREASE_COUNT}/3)"
-
-                    if [[ $MEMORY_INCREASE_COUNT -ge 3 ]]; then
-                        log_warn "Consistent memory leak detected, restarting browser..."
-                        recover_browser
-                        ((restart_count++))
-                        MEMORY_INCREASE_COUNT=0
-                    fi
-                else
-                    MEMORY_INCREASE_COUNT=0
-                fi
-            fi
-
-            if [[ $browser_memory -gt $((max_memory_kb * 3 / 4)) ]]; then
-                # Proactive cleanup when at 75% of limit
-                log_debug "Memory approaching limit (${browser_memory}KB), attempting cleanup..."
-                cleanup_browser_memory
-            fi
-
-            # Store current memory for leak detection
-            LAST_MEMORY_KB=$browser_memory
+            # Simple monitoring - just log current memory usage
         fi
         
 
@@ -2129,37 +2017,7 @@ monitor_browser_health() {
             recover_display
         fi
 
-        # Periodic iframe health check (more frequent than full refresh)
-        local current_time=$(date +%s)
-        if [[ $((current_time - last_iframe_check)) -ge $IFRAME_CHECK_INTERVAL ]]; then
-            if ! check_iframe_health; then
-                log_warn "Iframe issues detected, refreshing iframes..."
-                refresh_iframes
-            fi
-            last_iframe_check=$current_time
-        fi
-
-        # Auto-refresh for single URL mode (if enabled)
-        local auto_refresh_enabled
-        auto_refresh_enabled=$(get_config_value "kiosk.auto_refresh_enabled" "false")
-
-        if [[ "$auto_refresh_enabled" == "true" ]]; then
-            local auto_refresh_interval
-            auto_refresh_interval=$(get_config_value "kiosk.auto_refresh_interval" "60")
-
-            if [[ $((current_time - last_auto_refresh)) -ge $auto_refresh_interval ]]; then
-                log_debug "Performing auto-refresh (every ${auto_refresh_interval}s)..."
-                refresh_browser_page true
-                last_auto_refresh=$current_time
-            fi
-        fi
-
-        # Periodic page refresh to prevent memory buildup (fallback)
-        if [[ "$auto_refresh_enabled" != "true" ]] && [[ $((current_time - last_refresh)) -ge $PAGE_REFRESH_INTERVAL ]]; then
-            log_debug "Performing periodic page refresh..."
-            refresh_browser_page true  # Force full refresh
-            last_refresh=$current_time
-        fi
+        # Memory-based browser management only
 
         if [[ $(($(date +%s) % 300)) -eq 0 ]]; then
             log_debug "Health check: Browser running, Memory: ${browser_memory}KB"
@@ -2658,13 +2516,23 @@ Kiosk API Gateway - Complete Reference
 System IP: $ip_addr
 API Key: $api_key
 
+MEMORY MANAGEMENT:
+- Dynamic memory limits based on system RAM
+- Your system: $(free -h | awk '/^Mem:/ {print $2}') RAM
+- Browser memory limit: Auto-calculated for optimal performance
+- Memory monitoring with automatic browser restart when needed
+
+BROWSER MANAGEMENT:
+- Memory-based browser restarts (much faster than page refreshing)
+- Dynamic memory limits based on system RAM
+- No forced page refreshing - clean, simple operation
+- Fast browser-only restart (no service restart needed)
+
 ===============================================
 CLI Commands
 ===============================================
   kiosk status
-  kiosk set-url http://your-site.com
-  kiosk set-url http://your-site.com 30     # Auto-refresh every 30 seconds
-  kiosk set-url http://your-site.com 0      # Disable auto-refresh
+  kiosk set-url http://your-site.com        # Memory management handles browser health
   kiosk get-url
   kiosk set-display-orientation left
   kiosk get-rotation
@@ -2689,8 +2557,6 @@ curl "http://$ip_addr/api-info?api_key=$api_key"
 
 
 curl -X POST "http://$ip_addr/set-url?api_key=$api_key&url=http://google.com"
-curl -X POST "http://$ip_addr/set-url?api_key=$api_key&url=http://google.com&refresh_rate=30"
-curl -X POST "http://$ip_addr/set-url?api_key=$api_key&url=http://google.com&refresh_rate=0"
 curl "http://$ip_addr/get-url?api_key=$api_key"
 
 
@@ -2718,10 +2584,6 @@ API Endpoints - Advanced JSON Commands
 curl -X POST "http://$ip_addr/set-url?api_key=$api_key" \\
      -H "Content-Type: application/json" \\
      -d '{"url": "http://dashboard.example.com"}'
-
-curl -X POST "http://$ip_addr/set-url?api_key=$api_key" \\
-     -H "Content-Type: application/json" \\
-     -d '{"url": "http://dashboard.example.com", "refresh_rate": 30}'
 
 
 curl -X POST "http://$ip_addr/playlist-add?api_key=$api_key" \\
@@ -2943,9 +2805,9 @@ $CHROMIUM_PATH \$BROWSER_FLAGS "\$URL" &
 BROWSER_PID=\$!
 echo \$BROWSER_PID > /tmp/kiosk-browser.pid
 
-# Start browser monitoring for auto-refresh (single URL mode only)
+# Start browser monitoring for memory management (single URL mode only)
 if [[ "\$PLAYLIST_ENABLED" != "true" ]]; then
-    echo "Starting browser monitoring for auto-refresh..."
+    echo "Starting browser memory monitoring..."
     (
         sleep 5  # Wait for browser to start
 
@@ -2957,7 +2819,7 @@ if [[ "\$PLAYLIST_ENABLED" != "true" ]]; then
     ) &
     MONITOR_PID=\$!
     echo \$MONITOR_PID > /tmp/kiosk-monitor.pid
-    echo "Browser monitoring started (PID: \$MONITOR_PID)"
+    echo "Browser memory monitoring started (PID: \$MONITOR_PID)"
 fi
 
 
@@ -3313,19 +3175,11 @@ class KioskCommandHandler(BaseHTTPRequestHandler):
             parsed_url = urlparse(self.path)
             query_params = parse_qs(parsed_url.query)
             url_param = query_params.get('url', [''])[0]
-            refresh_param = query_params.get('refresh_rate', [''])[0] or query_params.get('refresh', [''])[0]
 
             if url_param:
-                if refresh_param:
-                    result = execute_kiosk_command('set-url', url_param.strip(), refresh_param.strip())
-                else:
-                    result = execute_kiosk_command('set-url', url_param.strip())
+                result = execute_kiosk_command('set-url', url_param.strip())
             elif data.get('url'):
-                refresh_rate = data.get('refresh_rate') or data.get('refresh')
-                if refresh_rate:
-                    result = execute_kiosk_command('set-url', data['url'], str(refresh_rate))
-                else:
-                    result = execute_kiosk_command('set-url', data['url'])
+                result = execute_kiosk_command('set-url', data['url'])
             elif data.get('urls'):
 
                 self.send_response(400)
@@ -3743,9 +3597,8 @@ print_setup_info() {
     echo "   1. sudo reboot" >&2
     echo "   2. System auto-starts kiosk + API gateway" >&2
     echo "   3. Set URL: curl -X POST \"http://$ip_addr/set-url?api_key=$api_key&url=http://your-site.com\"" >&2
-    echo "   4. Auto-refresh: curl -X POST \"http://$ip_addr/set-url?api_key=$api_key&url=http://your-site.com&refresh_rate=30\"" >&2
-    echo "   5. CLI: kiosk status | kiosk set-url <URL> [refresh_rate] | kiosk playlist" >&2
-    echo "   6. Full examples: cat $INSTALL_DIR/USAGE_EXAMPLES.md" >&2
+    echo "   4. CLI: kiosk status | kiosk set-url <URL> | kiosk playlist" >&2
+    echo "   5. Full examples: cat $INSTALL_DIR/USAGE_EXAMPLES.md" >&2
     echo "========================================" >&2
 }
 
@@ -3759,15 +3612,11 @@ get_url() {
 
 set_url() {
     local url="$1"
-    local refresh_rate="$2"
 
     if [[ -z "$url" ]]; then
         log_error "URL is required"
-        echo "Usage: kiosk set-url <URL> [refresh_rate_seconds]"
-        echo "Examples:"
-        echo "  kiosk set-url http://google.com 30  # Refresh every 30 seconds"
-        echo "  kiosk set-url http://google.com 0   # Disable auto-refresh"
-        echo "  kiosk set-url http://google.com     # Disable auto-refresh (default)"
+        echo "Usage: kiosk set-url <URL>"
+        echo "Example: kiosk set-url http://google.com"
         exit 1
     fi
     
@@ -3778,28 +3627,7 @@ set_url() {
     fi
     
 
-    # Validate refresh rate if provided
-    if [[ -n "$refresh_rate" ]]; then
-        if ! [[ "$refresh_rate" =~ ^[0-9]+$ ]]; then
-            log_error "Refresh rate must be a number (0 = disabled, >=10 = enabled)"
-            exit 1
-        fi
-
-        if [[ "$refresh_rate" -eq 0 ]]; then
-            set_config_value "kiosk.auto_refresh_enabled" "false"
-            log_info "Auto-refresh disabled"
-        elif [[ "$refresh_rate" -lt 10 ]]; then
-            log_error "Refresh rate must be >= 10 seconds (or 0 to disable)"
-            exit 1
-        else
-            set_config_value "kiosk.auto_refresh_interval" "$refresh_rate"
-            set_config_value "kiosk.auto_refresh_enabled" "true"
-            log_info "Auto-refresh enabled: every $refresh_rate seconds"
-        fi
-    else
-        set_config_value "kiosk.auto_refresh_enabled" "false"
-        log_info "Auto-refresh disabled (no refresh rate specified)"
-    fi
+    # Auto-refresh functionality removed - memory management handles browser health
 
     set_config_value "kiosk.url" "$url"
     set_config_value "playlist.enabled" "false"
@@ -4107,7 +3935,7 @@ show_help() {
     echo "MANAGEMENT:"
     echo "  kiosk status                     - Show system status"
     echo "  kiosk get-url                    - Get current URL"
-    echo "  kiosk set-url <URL> [refresh_rate] - Set URL and restart browser (refresh_rate in seconds)"
+    echo "  kiosk set-url <URL>              - Set URL and restart browser"
     echo "  kiosk get-rotation               - Get current display orientation"
     echo "  kiosk set-display-orientation <orientation> - Set display orientation (normal|left|right|inverted)"
     echo "  kiosk get-api-key                - Show current API key"
@@ -4126,9 +3954,7 @@ show_help() {
     echo "  kiosk help                       - Show this help"
     echo
     echo "EXAMPLES:"
-    echo "  kiosk set-url http://google.com 30    # Refresh every 30 seconds"
-    echo "  kiosk set-url http://google.com 0     # Disable auto-refresh"
-    echo "  kiosk set-url http://google.com       # Disable auto-refresh (default)"
+    echo "  kiosk set-url http://google.com       # Memory management handles browser health"
     echo "  kiosk set-display-orientation left"
     echo "  kiosk logs kiosk"
     echo
@@ -4290,7 +4116,7 @@ main() {
             get_url
             ;;
         "set-url")
-            set_url "$2" "$3"
+            set_url "$2"
             ;;
         "get-rotation")
             get_rotation
